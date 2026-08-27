@@ -36,8 +36,10 @@ services:
     devices:
       - /dev/infiniband:/dev/infiniband
     volumes:
+      - ./exec-vllm.sh:/exec-vllm.sh:ro
       - /var/tmp/glm-5.3-flash-nvfp4:/models/glm-5.3-flash-nvfp4:ro
       - /var/tmp/glm53-vllm-cache:/cache
+    entrypoint: ["/bin/bash"]
     environment:
       - NODE_RANK=0
       - HOST_IP=${HEAD_IP:-10.100.90.1}
@@ -75,9 +77,7 @@ services:
       - NCCL_IGNORE_CPU_AFFINITY=1
       - NCCL_DEBUG=WARN
       - TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-    command:
-      - /bin/bash
-      - /workspace/exec-vllm.sh
+    command: ["/exec-vllm.sh"]
 
   glm53-worker:
     image: glm53:v8
@@ -102,8 +102,10 @@ services:
     devices:
       - /dev/infiniband:/dev/infiniband
     volumes:
+      - ./exec-vllm.sh:/exec-vllm.sh:ro
       - /var/tmp/glm-5.3-flash-nvfp4:/models/glm-5.3-flash-nvfp4:ro
       - /var/tmp/glm53-vllm-cache:/cache
+    entrypoint: ["/bin/bash"]
     environment:
       - NODE_RANK=1
       - HOST_IP=${WORKER_IP:-10.100.90.4}
@@ -141,6 +143,4 @@ services:
       - NCCL_IGNORE_CPU_AFFINITY=1
       - NCCL_DEBUG=WARN
       - TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-    command:
-      - /bin/bash
-      - /workspace/exec-vllm.sh
+    command: ["/exec-vllm.sh"]
