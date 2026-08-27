@@ -1,20 +1,21 @@
-# GLM-5.3-Flash-NVFP4 on 2x DGX Spark (aitopatom-6253 head + spark-cfb3 worker)
-# vLLM TP=2 over the QSFP/RoCE fabric.
+# GLM-5.3-Flash-NVFP4 on 2x DGX Spark — vLLM TP=2 over the QSFP/RoCE fabric.
 #
-# This compose file defines the two vLLM ranks; the launch ORDER is managed by
-# cluster.sh on the Mac (worker rank 1 first, then head rank 0) because vLLM's
+# Host-agnostic: ALL site-specific values come from .env (see example.env):
+#   HEAD_IP, WORKER_IP, FABRIC_RANGE, IF_NAME, NCCL_IB_HCA, NCCL_IB_GID_INDEX,
+#   WEIGHTS_DIR, VLLM_CACHE_DIR, MASTER_PORT, SERVING_PORT, IMAGE
+# Run via cluster.sh (worker rank 1 first, then head rank 0) because vLLM's
 # mp executor requires the worker to be up before the head completes world init.
 #
-# The image (glm53:v8 = tonyd2world sm_121 patch chain on
+# The image (default glm53:v8 = tonyd2world sm_121 patch chain on
 # vllm/vllm-openai:glm53-flash-arm64-cu130) is built on the head by
 # build-image.sh and shipped to the worker — this file does NOT build anything.
 #
-# Weights are pre-staged at /var/tmp/glm-5.3-flash-nvfp4 on BOTH nodes
+# Weights are pre-staged at WEIGHTS_DIR on BOTH nodes
 # (local copies: +33% KV headroom vs NFS, per the reference deploy).
 
 services:
   glm53-head:
-    image: glm53:v8
+    image: ${IMAGE:?IMAGE must be set in .env}
     container_name: vllm_glm53_head
     init: true
     restart: "no"
@@ -37,14 +38,14 @@ services:
       - /dev/infiniband:/dev/infiniband
     volumes:
       - ./exec-vllm.sh:/exec-vllm.sh:ro
-      - /var/tmp/glm-5.3-flash-nvfp4:/models/glm-5.3-flash-nvfp4:ro
-      - /var/tmp/glm53-vllm-cache:/cache
+      - ${WEIGHTS_DIR:?WEIGHTS_DIR must be set in .env}:/models/glm-5.3-flash-nvfp4:ro
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR must be set in .env}:/cache
     entrypoint: ["/bin/bash"]
     environment:
       - NODE_RANK=0
-      - HOST_IP=${HEAD_IP:-10.100.90.1}
+      - HOST_IP=${HEAD_IP:?HEAD_IP must be set in .env}
       - HEADLESS=
-      - HEAD_ADDR=${HEAD_IP:-10.100.90.1}
+      - HEAD_ADDR=${HEAD_IP:?HEAD_IP must be set in .env}
       - MASTER_PORT=${MASTER_PORT:-29521}
       - SERVING_PORT=${SERVING_PORT:-8000}
       - MODEL_PATH=/models/glm-5.3-flash-nvfp4
@@ -52,7 +53,7 @@ services:
       - HF_HOME=/cache/huggingface
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
-      - VLLM_HOST_IP=${HEAD_IP:-10.100.90.1}
+      - VLLM_HOST_IP=${HEAD_IP:?HEAD_IP must be set in .env}
       - VLLM_ENGINE_READY_TIMEOUT_S=3600
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - TORCH_CUDA_ARCH_LIST=12.1a
@@ -61,15 +62,15 @@ services:
       # NCCL over the QSFP fabric (both RoCE PCIe-x4 twins)
       - NCCL_NET=IB
       - NCCL_IB_DISABLE=0
-      - NCCL_IB_HCA=${NCCL_IB_HCA:-rocep1s0f1,roceP2p1s0f1}
+      - NCCL_IB_HCA=${NCCL_IB_HCA:?NCCL_IB_HCA must be set in .env}
       - NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
       - NCCL_IB_ROCE_VERSION_NUM=2
       - NCCL_IB_ADDR_FAMILY=AF_INET
-      - NCCL_IB_ADDR_RANGE=${FABRIC_RANGE:-10.100.90.0/24}
-      - NCCL_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - GLOO_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - TP_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - MN_IF_NAME=${IF_NAME:-enp1s0f1np1}
+      - NCCL_IB_ADDR_RANGE=${FABRIC_RANGE:?FABRIC_RANGE must be set in .env}
+      - NCCL_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - GLOO_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - TP_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - MN_IF_NAME=${IF_NAME:?IF_NAME must be set in .env}
       - NCCL_NVLS_ENABLE=0
       - NCCL_CROSS_NIC=0
       - NCCL_IB_MERGE_NICS=0
@@ -80,7 +81,7 @@ services:
     command: ["/exec-vllm.sh"]
 
   glm53-worker:
-    image: glm53:v8
+    image: ${IMAGE:?IMAGE must be set in .env}
     container_name: vllm_glm53_worker
     init: true
     restart: "no"
@@ -103,14 +104,14 @@ services:
       - /dev/infiniband:/dev/infiniband
     volumes:
       - ./exec-vllm.sh:/exec-vllm.sh:ro
-      - /var/tmp/glm-5.3-flash-nvfp4:/models/glm-5.3-flash-nvfp4:ro
-      - /var/tmp/glm53-vllm-cache:/cache
+      - ${WEIGHTS_DIR:?WEIGHTS_DIR must be set in .env}:/models/glm-5.3-flash-nvfp4:ro
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR must be set in .env}:/cache
     entrypoint: ["/bin/bash"]
     environment:
       - NODE_RANK=1
-      - HOST_IP=${WORKER_IP:-10.100.90.4}
+      - HOST_IP=${WORKER_IP:?WORKER_IP must be set in .env}
       - HEADLESS=--headless
-      - HEAD_ADDR=${HEAD_IP:-10.100.90.1}
+      - HEAD_ADDR=${HEAD_IP:?HEAD_IP must be set in .env}
       - MASTER_PORT=${MASTER_PORT:-29521}
       - SERVING_PORT=${SERVING_PORT:-8000}
       - MODEL_PATH=/models/glm-5.3-flash-nvfp4
@@ -118,7 +119,7 @@ services:
       - HF_HOME=/cache/huggingface
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
-      - VLLM_HOST_IP=${WORKER_IP:-10.100.90.4}
+      - VLLM_HOST_IP=${WORKER_IP:?WORKER_IP must be set in .env}
       - VLLM_ENGINE_READY_TIMEOUT_S=3600
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - TORCH_CUDA_ARCH_LIST=12.1a
@@ -127,15 +128,15 @@ services:
       # NCCL over the QSFP fabric (both RoCE PCIe-x4 twins)
       - NCCL_NET=IB
       - NCCL_IB_DISABLE=0
-      - NCCL_IB_HCA=${NCCL_IB_HCA:-rocep1s0f1,roceP2p1s0f1}
+      - NCCL_IB_HCA=${NCCL_IB_HCA:?NCCL_IB_HCA must be set in .env}
       - NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
       - NCCL_IB_ROCE_VERSION_NUM=2
       - NCCL_IB_ADDR_FAMILY=AF_INET
-      - NCCL_IB_ADDR_RANGE=${FABRIC_RANGE:-10.100.90.0/24}
-      - NCCL_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - GLOO_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - TP_SOCKET_IFNAME=${IF_NAME:-enp1s0f1np1}
-      - MN_IF_NAME=${IF_NAME:-enp1s0f1np1}
+      - NCCL_IB_ADDR_RANGE=${FABRIC_RANGE:?FABRIC_RANGE must be set in .env}
+      - NCCL_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - GLOO_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - TP_SOCKET_IFNAME=${IF_NAME:?IF_NAME must be set in .env}
+      - MN_IF_NAME=${IF_NAME:?IF_NAME must be set in .env}
       - NCCL_NVLS_ENABLE=0
       - NCCL_CROSS_NIC=0
       - NCCL_IB_MERGE_NICS=0

@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
-# Orchestrate the GLM-5.3-Flash vLLM TP=2 cluster from the Mac.
+# Orchestrate the GLM-5.3-Flash vLLM TP=2 cluster from the orchestrator (e.g. a Mac).
 # The head and worker run the same docker-compose.yml; launch order is enforced
 # here (worker rank 1 first, head rank 0 second) per the mp executor's requirement.
+#
+# Host-agnostic: all site-specific values come from .env (see example.env).
 #
 # usage: cluster.sh <preflight|up|down|status|logs>
 set -euo pipefail
 cd "$(dirname "$0")"
+
+[[ -f .env ]] || { echo "FATAL: no .env here — copy example.env to .env and fill it in" >&2; exit 1; }
 set -a; source .env; set +a
 
+: "${HEAD_HOST:?set HEAD_HOST in .env (see example.env)}"
+: "${WORKER_IP:?set WORKER_IP in .env (see example.env)}"
+: "${REMOTE_DIR:?set REMOTE_DIR in .env (see example.env)}"
+SERVING_PORT="${SERVING_PORT:-8000}"
+WEIGHTS_DIR="${WEIGHTS_DIR:-/var/tmp/glm-5.3-flash-nvfp4}"
+IMAGE="${IMAGE:-glm53:v8}"
+
 HEAD_SSH="ssh $HEAD_HOST"
-WORKER_SSH="ssh $HEAD_HOST ssh $WORKER_IP"
 
 # Correct two-hop runner: base64-encode the command so it survives both ssh
 # hops verbatim (no shell splitting at the first hop; sshd joins argv with
@@ -18,18 +28,18 @@ WORKER_SSH="ssh $HEAD_HOST ssh $WORKER_IP"
 run_worker() {
   local b64
   b64=$(printf '%s' "$1" | base64 | tr -d '\n')
-  # Mac expands $b64 (defined here) into the string; inner single-quotes keep it
-  # one token across the head hop; worker runs: echo <b64> | base64 -d | bash
+  # Orchestrator expands $b64 (defined here) into the string; inner single-quotes
+  # keep it one token across the head hop; worker runs: echo <b64> | base64 -d | bash
   ssh -T "$HEAD_HOST" "ssh -T $WORKER_IP 'echo \"$b64\" | base64 -d | bash'"
 }
 
 preflight() {
-  $HEAD_SSH 'ss -ltn | grep -E ":8000\b" && { echo "HEAD: port 8000 BUSY"; exit 1; } ; echo "HEAD: port 8000 free"'
-  run_worker 'ss -ltn | grep -E ":8000\b" && { echo "WORKER: port 8000 BUSY"; exit 1; } ; echo "WORKER: port 8000 free"'
-  run_worker "test -f /var/tmp/glm-5.3-flash-nvfp4/config.json && echo 'WORKER: weights staged' || { echo 'WORKER: weights MISSING'; exit 1; }"
-  $HEAD_SSH "test -f /var/tmp/glm-5.3-flash-nvfp4/config.json && echo 'HEAD: weights staged' || { echo 'HEAD: weights MISSING'; exit 1; }"
-  run_worker "docker image inspect glm53:v8 >/dev/null && echo 'WORKER: image present' || { echo 'WORKER: image MISSING'; exit 1; }"
-  $HEAD_SSH "docker image inspect glm53:v8 >/dev/null && echo 'HEAD: image present' || { echo 'HEAD: image MISSING'; exit 1; }"
+  $HEAD_SSH "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"HEAD: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"HEAD: port $SERVING_PORT free\""
+  run_worker "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"WORKER: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"WORKER: port $SERVING_PORT free\""
+  run_worker "test -f \"$WEIGHTS_DIR/config.json\" && echo 'WORKER: weights staged' || { echo 'WORKER: weights MISSING'; exit 1; }"
+  $HEAD_SSH "test -f \"$WEIGHTS_DIR/config.json\" && echo 'HEAD: weights staged' || { echo 'HEAD: weights MISSING'; exit 1; }"
+  run_worker "docker image inspect \"$IMAGE\" >/dev/null && echo 'WORKER: image present' || { echo 'WORKER: image MISSING'; exit 1; }"
+  $HEAD_SSH "docker image inspect \"$IMAGE\" >/dev/null && echo 'HEAD: image present' || { echo 'HEAD: image MISSING'; exit 1; }"
   echo "preflight OK"
 }
 
@@ -39,16 +49,16 @@ up() {
   run_worker 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
 
   echo "==> Stopping any stale rank containers"
-  $HEAD_SSH "cd $REMOTE_DIR && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
-  run_worker "cd $REMOTE_DIR && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
+  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
+  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
 
   echo "==> Launching WORKER (rank 1) first"
-  run_worker "cd $REMOTE_DIR && docker compose --env-file .env up -d glm53-worker"
+  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env up -d glm53-worker"
   sleep 20
   run_worker "docker ps --filter name=vllm_glm53_worker --format '{{.Names}} {{.Status}}'"
 
   echo "==> Launching HEAD (rank 0)"
-  $HEAD_SSH "cd $REMOTE_DIR && docker compose --env-file .env up -d glm53-head"
+  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env up -d glm53-head"
 
   echo "==> Both ranks up. Engine takes 14-21 min (warm caches faster)."
   echo "    Watch:  cluster.sh logs"
@@ -56,8 +66,8 @@ up() {
 
 down() {
   # Hard-won rule: tear down BOTH ranks (worker first is irrelevant; both must go)
-  $HEAD_SSH "cd $REMOTE_DIR && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
-  run_worker "cd $REMOTE_DIR && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
+  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
+  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
   echo "both ranks stopped"
 }
 
@@ -66,7 +76,7 @@ status() {
   $HEAD_SSH "docker ps -a --filter name=vllm_glm53 --format 'HEAD   {{.Names}} | {{.Status}}'"
   run_worker "docker ps -a --filter name=vllm_glm53 --format 'WORKER {{.Names}} | {{.Status}}'"
   echo "--- endpoint ---"
-  curl -fsS "http://$HEAD_HOST:8000/v1/models" 2>/dev/null && echo || echo "endpoint not answering yet"
+  curl -fsS "http://$HEAD_HOST:$SERVING_PORT/v1/models" 2>/dev/null && echo || echo "endpoint not answering yet"
 }
 
 logs() {
