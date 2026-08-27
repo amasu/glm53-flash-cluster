@@ -58,7 +58,39 @@ Scripts and compose fail fast with a message naming the missing variable.
 - `cluster.sh` + `.env` — orchestrator-side control (preflight/up/down/status/logs)
 - `example.env` — configuration template (copy to `.env`, fill in)
 
-## Deploy
+## Quick Start (run on the head node)
+
+```bash
+# 1. Clone and configure
+git clone https://github.com/amasu/glm53-flash-cluster && cd glm53-flash-cluster
+cp example.env .env
+$EDITOR .env            # set WORKER_IP, HEAD_IP, FABRIC_RANGE, IF_NAME, NCCL_IB_HCA, REMOTE_DIR
+set -a; source .env; set +a
+
+# 2. Mirror the repo (incl. .env) to the worker at $REMOTE_DIR
+ssh "$WORKER_IP" "mkdir -p $REMOTE_DIR"
+rsync -a ./ "$WORKER_IP:$REMOTE_DIR/"
+
+# 3. Build the image (~1-2 h) and ship it to the worker
+./build-image.sh
+
+# 4. Download weights (~182 GiB) and rsync them to the worker
+./fetch-weights.sh
+
+# 5. Launch — worker (rank 1) first, then head (rank 0)
+docker compose --env-file .env up -d glm53-worker
+sleep 25
+docker compose --env-file .env up -d glm53-head
+
+# 6. Watch warmup (14-21 min), then smoke-test
+docker logs -f vllm_glm53_head
+curl "http://localhost:${SERVING_PORT:-8000}/v1/models"
+```
+
+`cluster.sh` stays for orchestration from a separate workstation (it ssh-hops
+head → worker); from the head node, plain compose is enough.
+
+## Deploy (from a workstation, via cluster.sh)
 
 1. Configure: copy `example.env` → `.env` (orchestrator + both nodes), fill in
 2. `./build-image.sh` on head → final image on both nodes (IDs verified identical)
