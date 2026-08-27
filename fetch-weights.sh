@@ -10,17 +10,17 @@ DIR="/var/tmp/glm-5.3-flash-nvfp4"
 WORKER_SSH="${WORKER_SSH:-ssh 10.100.90.4}"
 
 VENV="/tmp/hfvenv"
-if [[ ! -x "$VENV/bin/huggingface-cli" ]]; then
-  echo "==> setting up huggingface-cli in $VENV"
+if [[ ! -x "$VENV/bin/hf" ]]; then
+  echo "==> setting up hf CLI in $VENV"
   python3 -m venv "$VENV" 2>/dev/null \
     || { apt-get install -y -q python3-venv || sudo apt-get install -y -q python3-venv; python3 -m venv "$VENV"; }
-  "$VENV/bin/pip" install -q -U pip "huggingface_hub[cli]" hf_transfer
+  "$VENV/bin/pip" install -q -U pip "huggingface_hub[cli]"
 fi
 
 mkdir -p "$DIR"
 echo "==> downloading $MODEL_ID -> $DIR (resume-safe; ~182 GiB, 120 shards)"
-HF_HUB_ENABLE_HF_TRANSFER=1 HF_HUB_DOWNLOAD_TIMEOUT=60 \
-  "$VENV/bin/huggingface-cli" download "$MODEL_ID" --local-dir "$DIR"
+HF_HUB_DOWNLOAD_TIMEOUT=60 \
+  "$VENV/bin/hf" download "$MODEL_ID" --local-dir "$DIR"
 
 echo "==> checksum anchors (head)"
 cd "$DIR"
