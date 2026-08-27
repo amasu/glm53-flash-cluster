@@ -76,6 +76,9 @@ rsync -a ./ "$WORKER_IP:$REMOTE_DIR/"
 
 # 4. Download weights (~182 GiB) and rsync them to the worker
 ./fetch-weights.sh
+#    ...or, if weights are already staged on the head at $WEIGHTS_DIR:
+#    ssh "$WORKER_IP" "mkdir -p $WEIGHTS_DIR"
+#    rsync -a --info=progress2 "$WEIGHTS_DIR/" "$WORKER_IP:$WEIGHTS_DIR/"
 
 # 5. Launch — worker (rank 1) first, then head (rank 0)
 docker compose --env-file .env up -d glm53-worker
