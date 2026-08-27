@@ -1,3 +1,4 @@
 tonyd2world-repo/
 *.log
 __pycache__/
+.env
