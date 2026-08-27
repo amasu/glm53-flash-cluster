@@ -94,3 +94,42 @@ Reasoning effort: `chat_template_kwargs.reasoning_effort` = low|high|max.
   cap context at 262K on day 1, drop_caches before launches
 - KV headroom: local weights both nodes = +33% vs NFS; stage 2 = fp8 KV
   (`--kv-cache-dtype fp8_e4m3 --kv-cache-memory 5905580032`, 672K-token pool)
+
+## Credits
+
+This repo is an orchestration layer on top of the day-0 work of others — the
+sm_121 patch chain, the debugging knowledge, and the failure folklore all come
+from these sources:
+
+**Patches & reference deploy**
+
+- [tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark](https://github.com/tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark)
+  — world-first vLLM TP=2 on 2× DGX Spark. Built the v1→v8 sm_121 patch chain
+  (NoPE-MLA for SM121, FlashInfer 0.6.18 nightly, NCCL 2.30.7 re-pin,
+  cutlass-dsl 4.6.2, PDL off, indexer top-k hardening, fp8-KV smem-tile fix)
+  that `build-image.sh` assembles and ships. Their repo is also the source of
+  the ops rules in this README.
+- Day-0 base image [`vllm/vllm-openai:glm53-flash-arm64-cu130`](https://hub.docker.com/r/vllm/vllm-openai)
+  (vLLM team) and upstream [vLLM PR #53906](https://github.com/vllm-project/vllm/pull/53906)
+  (`glm5_next` architecture support, open at the time of writing).
+- [eugr/spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) — the b12x
+  Spark serving stack; evaluated as an alternative carrier before choosing the
+  tonyd2world chain (its custom MLA backends target the `pe_dim==64` layout
+  class this model can't use).
+- Model checkpoint: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
+  on Hugging Face.
+
+**NVIDIA DGX Spark / GB10 forum threads** (failure classes that shaped the ops
+rules — launch order, both-rank teardown, no crash-looping):
+
+- [Two-Spark cluster with vLLM using tensor-parallel-size 2 causes one node to
+  drop while the other's GPU goes 100% forever](https://forums.developer.nvidia.com/t/two-spark-cluster-with-vllm-using-tensor-parallel-size-2-causes-one-node-to-drop-while-the-others-gpu-goes-100-forever/358755)
+  — TP=2 node-drop after the first prompt; motivates the both-rank teardown and
+  diagnose-don't-crash-loop rules.
+- [Total host freeze (not process hang) during multi-node TP=2 vLLM prefill on
+  2× DGX Spark GB10, zero forensic trace across kdump/watchdogs/netconsole](https://forums.developer.nvidia.com/t/total-host-freeze-not-process-hang-during-multi-node-tp-2-vllm-prefill-on-2x-dgx-spark-gb10-zero-forensic-trace-across-kdump-watchdogs-netconsole/376882)
+  — heavy-prefill host freeze; motivates MTU 9000, the 262K day-1 context cap,
+  and pre-launch drop_caches.
+
+More GB10 collective wisdom: the
+[DGX Spark / GB10 forum category](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719).
