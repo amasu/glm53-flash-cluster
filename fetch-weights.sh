@@ -7,7 +7,7 @@ set -euo pipefail
 
 MODEL_ID="LibertAIDAI/GLM-5.3-Flash-NVFP4"
 DIR="/var/tmp/glm-5.3-flash-nvfp4"
-WORKER_SSH="${WORKER_SSH:-ssh 10.100.90.4}"
+WORKER_HOST="${WORKER_HOST:-10.100.90.4}"
 
 VENV="/tmp/hfvenv"
 if [[ ! -x "$VENV/bin/hf" ]]; then
@@ -29,8 +29,8 @@ cat /tmp/glm53-checksums.txt
 ls "$DIR"/*.safetensors | wc -l | grep -q '^120$' || { echo "FATAL: expected 120 shards, got $(ls "$DIR"/*.safetensors | wc -l)" >&2; exit 1; }
 
 echo "==> rsync to worker over fabric"
-$WORKER_SSH "mkdir -p $DIR"
-rsync -a --info=progress2 "$DIR" "$WORKER_SSH:$DIR"
+ssh "$WORKER_HOST" "mkdir -p $DIR"
+rsync -a --info=progress2 "$DIR/" "$WORKER_HOST:$DIR/"
 
 echo "==> verify worker copy"
-$WORKER_SSH "cd $DIR && sha256sum config.json generation_config.json model-00001-of-00120.safetensors model-00120-of-00120.safetensors; ls *.safetensors | wc -l; du -sh $DIR"
+ssh "$WORKER_HOST" "cd $DIR && sha256sum config.json generation_config.json model-00001-of-00120.safetensors model-00120-of-00120.safetensors; ls *.safetensors | wc -l; du -sh $DIR"
