@@ -1,0 +1,8 @@
+FROM glm53:sm121-v8
+
+# 512K-context support on SM121 (CC 12.1): disable persistent_topk +
+# cooperative workspace in the sparse-MLA indexer (62 CTAs / 128 KB smem
+# requested at 512K shapes vs 48 SMs / 99 KB on GB10 -> hard abort without
+# this). Anchors verified against the v8 image; self-assert + py_compile.
+COPY patch_v9_512k.py /tmp/patch_v9_512k.py
+RUN python3 /tmp/patch_v9_512k.py && rm /tmp/patch_v9_512k.py

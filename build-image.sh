@@ -11,11 +11,15 @@
 #   v6 = PDL off on SM12x
 #   v7 = indexer top-k hardening (torch.empty -> full(-1) + clamp)
 #   v8 = fp8-KV shared-memory tile fix
+#   v9 = 512K-context indexer CC-12.x guard (patches/patch_v9_512k.py, vendored
+#        anchors from FujitsuPolycom/glm53-flash-tp2-spark; see NOTES-512k.md)
 #   (v9/InstantTensor deliberately skipped: unstable in multi-node TP2)
 #
-# Author's intermediate tags (each Dockerfile's FROM names the previous stage):
+# Author's intermediate tags (each Dockerfile's FROM names the previous stage;
+# the loop below rewrites FROM anyway):
 #   v1 -> sm121-nope-mla, v3 -> sm121-fi618, v4 -> sm121-fi618-nccl,
-#   v5 -> sm121-final, v6 -> sm121-v6, v7 -> sm121-v7, v8 -> sm121-v8
+#   v5 -> sm121-final, v6 -> sm121-v6, v7 -> sm121-v7, v8 -> sm121-v8,
+#   v9 -> sm121-v9 (Dockerfile + patch live in this repo's docker/)
 #
 # Prereq: run on the head node, .env next to this script (see example.env).
 #         ~1-2 h total (base image pull + nightly pip).
@@ -24,7 +28,7 @@ cd "$(dirname "$0")"
 
 [[ -f .env ]] && { set -a; source .env; set +a; }
 : "${WORKER_IP:?set WORKER_IP in .env (see example.env)}"
-IMAGE="${IMAGE:-glm53:v8}"
+IMAGE="${IMAGE:-glm53:v9}"
 
 REPO_DIR="${REPO_DIR:-$HOME/glm53-flash-cluster/tonyd2world-repo}"
 BASE_IMAGE="${BASE_IMAGE:-vllm/vllm-openai:glm53-flash-arm64-cu130}"
@@ -38,6 +42,11 @@ STAGES=(
   "Dockerfile.glm53-sm121-v7|sm121-v7"
   "Dockerfile.glm53-sm121-v8|sm121-v8"
 )
+# v9 stage: built from THIS repo's docker/ dir (not the cloned author repo),
+# because its patch files are ours. Appended after the author chain.
+V9_DOCKERFILE="$(cd "$(dirname "$0")" && pwd)/docker/Dockerfile.glm53-sm121-v9"
+V9_PATCH="$(cd "$(dirname "$0")" && pwd)/docker/patch_v9_512k.py"
+V9_TAG="sm121-v9"
 FINAL_IMAGE="$IMAGE"
 WORKER_SSH="${WORKER_SSH:-ssh $WORKER_IP}"
 
@@ -63,6 +72,13 @@ for stage in "${STAGES[@]}"; do
   docker build -f Dockerfile.build -t "glm53:$tag" "$REPO_DIR/docker"
   prev="glm53:$tag"
 done
+
+# v9 stage (ours, not in the author repo): 512K-context indexer guard.
+echo "==> Stage v9: $V9_TAG (FROM $prev)  [local $V9_DOCKERFILE]"
+[[ -f "$V9_DOCKERFILE" && -f "$V9_PATCH" ]] || { echo "FATAL: missing $V9_DOCKERFILE or $V9_PATCH"; exit 1; }
+sed "s|^FROM .*|FROM $prev|" "$V9_DOCKERFILE" > Dockerfile.build
+docker build -f Dockerfile.build -t "glm53:$V9_TAG" "$(dirname "$V9_DOCKERFILE")"
+prev="glm53:$V9_TAG"
 
 docker tag "$prev" "$FINAL_IMAGE"
 echo "==> Shipping $FINAL_IMAGE to worker via $WORKER_SSH (docker save | docker load)"
