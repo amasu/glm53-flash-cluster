@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
-# Container entrypoint for glm53:v9 — 512K-context experiment (round 2).
+# Container entrypoint for glm53:v9 — 512K-context, MTP k=4 + 9 GiB KV pin
+# (quality-isolation A/B vs the 10 GiB / k=3 shipped profile).
+# Deltas vs exec-vllm-512k.sh (the shipped 87/100 profile):
+#   * num_speculative_tokens 3 -> 4  (test whether the 87->90 quality gap is
+#     the drafter-depth step; k=4 was the day-0 default)
+#   * kv-cache-memory-bytes 10GiB -> 9GiB (frees ~1 GiB for k=4 activation
+#     scratch; pool 1.44M -> ~1.26M tokens, still ~2.4x concurrency @512K)
+# Everything else identical: gm 0.90, fp8 KV, 524288 ctx, 4096 batched,
+# chunked prefill, prefix caching, custom-all-reduce off, autotune/cutedsl-
+# warmup off, enforce-eager, language-model-only, block 2304, marlin MoE.
+# The v9 image carries the sparse-MLA indexer CC-12.x guard required for
+# 512K-context shapes (see docker/patch_v9_512k.py).
 # Round-1 failure mode (documented): the full 512K reference memory profile
 # OOM'd the GB10 driver (NVRM NV_ERR_NO_MEMORY during the engine warmup
 # forward) because THIS stack keeps the multimodal processor alive
@@ -37,7 +48,7 @@ vllm serve "$MODEL_PATH" \
   --tensor-parallel-size 2 \
   --gpu-memory-utilization 0.90 \
   --kv-cache-dtype fp8 \
-  --kv-cache-memory-bytes 10737418240 \
+  --kv-cache-memory-bytes 9663676416 \
   --max-model-len 524288 \
   --max-num-seqs 6 --block-size 2304 --moe-backend marlin \
   --max-num-batched-tokens 4096 \
@@ -48,7 +59,7 @@ vllm serve "$MODEL_PATH" \
   --enforce-eager \
   --tool-call-parser glm47 --enable-auto-tool-choice \
   --reasoning-parser glm45 \
-  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":4}' \
   --language-model-only \
   --distributed-executor-backend mp \
   --nnodes 2 --node-rank "$NODE_RANK" \

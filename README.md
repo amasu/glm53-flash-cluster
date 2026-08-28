@@ -4,6 +4,12 @@ Two-node DGX Spark cluster (head = rank 0, worker = rank 1) serving
 `LibertAIDAI/GLM-5.3-Flash-NVFP4` (320B total / 18B active, 181 GiB, `glm5_next`)
 as `glm-5.3-flash` over vLLM TP=2 on the QSFP/RoCE fabric.
 
+**Current config (2026-08-28):** 512K context, FP8 KV with 9 GiB pinned pool
+(1,261,444 tokens, 2.41× concurrency at 512K), MTP k=4, `--language-model-only`
+(text-only). ~24–30 tok/s decode c1; 89/100 tool-call quality (seed-42 hardmode).
+See `benchmarks.md` for the full investigation log and `NOTES-512k.md` for the
+512K upgrade + crash forensics.
+
 **Host-agnostic:** every site-specific value (hostnames, IPs, ports, paths,
 interface names) comes from `.env`. Copy `example.env` → `.env`, fill it in,
 and deploy it in three places:
@@ -26,7 +32,7 @@ Scripts and compose fail fast with a message naming the missing variable.
 | `VLLM_CACHE_DIR` | vLLM/HF cache dir on both nodes |
 | `SERVING_PORT` | OpenAI endpoint port (default 8000) |
 | `MASTER_PORT` | torch distributed rendezvous port (default 29521) |
-| `IMAGE` | built image tag (default `glm53:v8`) |
+| `IMAGE` | built image tag (default `glm53:v9`) |
 | `FABRIC_RANGE` | interconnect subnet, e.g. `10.0.0.0/24` |
 | `IF_NAME` | fabric interface name on both nodes (`ip link`) |
 | `NCCL_IB_HCA` | RoCE/IB HCA list (`ibdev2netdev`) |
@@ -52,11 +58,20 @@ Scripts and compose fail fast with a message naming the missing variable.
 ## Layout
 
 - `docker-compose.yml` — both ranks; run via `cluster.sh` (worker first, then head)
-- `exec-vllm.sh` — container entrypoint (baked into the image at /workspace)
-- `build-image.sh` — head: clone tonyd2world repo, build v1→v8, ship to worker
+- `exec-vllm.sh` — container entrypoint, **default = current 512K config**
+  (512K ctx, fp8 KV 9 GiB pin, MTP k=4, `--language-model-only`, gm 0.90).
+  Alternative profiles are kept side-by-side and swapped by
+  `cp exec-vllm-<profile>.sh exec-vllm.sh` on both nodes, then down/up:
+  `exec-vllm-512k.sh` (512K + 10 GiB pin + MTP-3, 1.44M pool, 87/100),
+  `exec-vllm-512k-k4.sh` (= the current default, 89/100),
+  `exec-vllm-262k-fp8.sh` (262K + fp8 KV, 610K pool, multimodal ON, 90/100),
+  `exec-vllm-v8-262k.sh` (day-0 262K + bf16 KV, 311K pool, 89/100).
+- `build-image.sh` — head: clone tonyd2world repo, build v1→v8, add v9 guard, ship to worker
 - `fetch-weights.sh` — head: HF download + rsync to worker + checksum verify
 - `cluster.sh` + `.env` — orchestrator-side control (preflight/up/down/status/logs)
 - `example.env` — configuration template (copy to `.env`, fill in)
+- `benchmarks.md` — investigation + benchmark log (quality, speed, pools, forensics)
+- `NOTES-512k.md` — 512K upgrade notes + crash forensics + rollback
 
 ## Quick Start (run on the head node)
 
@@ -103,15 +118,22 @@ head → worker); from the head node, plain compose is enough.
 
 ## Key serve flags (load-bearing — do not "clean up")
 
+Current default profile (`exec-vllm.sh`, 512K + MTP-4 + 9 GiB pin):
+
 | flag | why |
 |---|---|
 | `--block-size 2304` | aligner default 2176 → kpool pages tile by 32 not 64; DeepGEMM arch-12 fp8 paged-MQA needs 64-entry pages |
-| `--gpu-memory-utilization 0.85` | 0.78–0.80 starve KV cache at long context |
+| `--gpu-memory-utilization 0.90` | with a pinned KV pool the engine skips memory profiling; 0.90 leaves activation headroom for the warmup forward (lower values just waste UMA) |
+| `--kv-cache-dtype fp8` + `--kv-cache-memory-bytes 9663676416` | SM90 NoPE path dequantizes in-kernel (`has_flashinfer_sm90_nope_mla()`); the pin makes the pool deterministic (1,261,444 tok) instead of GMU-dependent |
+| `--max-model-len 524288` | 512K context; requires the v9 image's CC-12.x sparse-MLA indexer guard |
+| `--max-num-batched-tokens 4096` | 8192 OOMs the GB10 driver at 512K shapes |
+| `--kernel-config '{"enable_cutedsl_warmup":false,"enable_flashinfer_autotune":false}'` | autotune/cutedsl-warmup scratch at 512K shapes OOMs (`NV_ERR_NO_MEMORY`) |
+| `--speculative-config mtp/4` | MTP head is BF16 in this checkpoint; per-position acceptance 0.81/0.67/0.51/0.42, acceptance length ~3.1–3.4. k is a speed knob only (MTP is lossless vs k); k=3 costs quality on this model (see benchmarks.md §6) |
+| `--language-model-only` | drops the ~15.7 GiB multimodal front-end; without it the pinned-KV + gm-0.90 profile OOMs at warmup on the 121.69 GiB UMA line |
 | `--moe-backend marlin` | card's known-good sm_121 fallback |
-| `--enforce-eager` | CUDA graphs unvalidated on this arch at day-0; MTP still engages |
+| `--enforce-eager` | CUDA graphs unvalidated on this arch; MTP still engages |
 | `--tool-call-parser glm47` | `glm` fails SILENTLY (empty content, tool_calls null) |
 | `--reasoning-parser glm45` | without it trace lands in `content` with bare `</think>` |
-| `--speculative-config mtp/4` | MTP head is BF16 in this checkpoint; acceptance 2.5–2.9 |
 | `NCCL_CUMEM_ENABLE=0 NCCL_NVLS_ENABLE=0` | unvalidated on consumer Blackwell / unified memory |
 | `VLLM_ENGINE_READY_TIMEOUT_S=3600` | 320B MoE warmup; else killed mid-init |
 
@@ -127,8 +149,9 @@ Reasoning effort: `chat_template_kwargs.reasoning_effort` = low|high|max.
 - Forum-documented failure classes: TP2 node-drop after first prompt (#358755);
   total host freeze during heavy multi-node prefill (#376882) → keep MTU 9000,
   cap context at 262K on day 1, drop_caches before launches
-- KV headroom: local weights both nodes = +33% vs NFS; stage 2 = fp8 KV
-  (`--kv-cache-dtype fp8_e4m3 --kv-cache-memory 5905580032`, 672K-token pool)
+- KV headroom: local weights both nodes = +33% vs NFS; fp8 KV + pinned pool
+  is the current default (1.26M-token pool; see `benchmarks.md` for the
+  10 GiB / 1.44M-token variant and the pin-size vs draft-depth trade)
 
 ## Credits
 
