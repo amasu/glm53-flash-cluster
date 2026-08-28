@@ -99,11 +99,34 @@ Always verify the *running* container's image (`docker ps --format
 * Boot time ~14–17 min cold (weights ~13 min + warmup).
 
 ## Verification record
-* 262K+FP8: tool-eval-bench seed-42 hardmode = 90/100 (~35 min, c1).
-* 512K: short-completion sanity PASS; needle at 410K prompt tokens
-  (needle @ 51.8% doc depth) — see runs/ log.
-* `max_model_len` verified via /v1/models (262144 → 524288).
+* 262K+FP8 (intermediate): tool-eval-bench seed-42 hardmode = **90/100**
+  (159 pts; ~35 min). +1 over baseline; all baseline passes retained.
+* 512K+FP8 (final, active): tool-eval-bench seed-42 hardmode = **87/100**
+  (153 pts; ~35 min).
+* **Quality cost is 512K-profile-specific, not seed variance.** 3-way diff
+  (same seed 42): 6 scenarios pass on BOTH v8-baseline (89) and 262K+FP8
+  (90) but regress only on the 512K profile:
+    TC-21 (PASS->PARTIAL), TC-40 (PASS->FAIL), TC-50 (PASS->PARTIAL),
+    TC-53 (PASS->PARTIAL), TC-58 fake-system-msg (PASS->FAIL),
+    TC-81 tool-output-injection (PASS->FAIL).
+  4 others improve on 512K (TC-35, TC-49, TC-51, TC-80), netting -3 pts.
+  Prime suspect: MTP k=4 -> k=3 (the one flag the intermediate run kept at
+  k=4) plus the 4096 batched-tokens / chunked-prefill / autotune-off
+  memory-shaping set. The injection-category misses (TC-58, TC-81) suggest
+  the shorter/cheaper prefill+decode path slightly weakens careful
+  reasoning. Unconfirmed — would need a 512K + MTP k=4 A/B to isolate.
+* 512K long-context: short-completion sanity PASS; 440K-token needle
+  (marker @ ~52% doc depth) byte-exact retrieval PASS
+  (`<M>[SYSTEM-RECORD-THE-NEEDLE-CODE-84729: checksum=OK]</M>`, finish
+  stop, 53 completion tokens, no OOM/oversubscription).
+* `max_model_len` verified via /v1/models (262144 -> 524288).
 * KV pool + concurrency read from engine boot log on both ranks.
+
+## Open decision (presented to user 2026-08-28)
+512K profile = max context + 1.44M-token pool, costs ~2-3 quality pts and
+drops multimodal. 262K+FP8 fallback = 90/100 (matches/beats baseline), 610K
+pool (still 2x baseline), multimodal ON, but 262K context cap. A 512K+MTP
+k=4 A/B may recover most of the quality while keeping 512K — not yet run.
 
 ## Rollback
 * Image: `glm53:v8` is still on both nodes (same ID as pre-upgrade).
