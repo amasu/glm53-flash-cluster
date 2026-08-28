@@ -23,7 +23,7 @@ sizes, and the crash forensics. Updated as each experiment lands.
 | 0 | `exec-vllm-v8-262k.sh` (day-0) | glm53:v8 | 262K | bf16 | **311,419 tok** (1.19×) | **89/100** (156 pts) | ~14–22 tok/s (comm. ~14.3 bf16) | retired baseline |
 | 1 | `exec-vllm-262k-fp8.sh` | glm53:v9 | 262K | fp8 | **610,519 tok** (2.33×) | **90/100** (159 pts) | ~21.8 tok/s (comm. fp8+MTP4) | fallback profile |
 | 2 | `exec-vllm-512k.sh` (10GiB pin, MTP-3) | glm53:v9 | **512K** | fp8, **10 GiB pin** | **1,435,742 tok** (2.74× conc. @512K) | **87/100** (153 pts) | **~24–30 tok/s** live (MTP-3) | superseded |
-| 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (155 pts) | same ~25–30 tok/s band; MTP-4 acceptance 46.3% | **ACTIVE (standing config)** |
+| 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (157 pts) | same ~25–30 tok/s band; median turn 5.9 s; MTP-4 acceptance 46.3% | **ACTIVE (standing config)** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
