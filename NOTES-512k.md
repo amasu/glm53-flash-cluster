@@ -122,11 +122,19 @@ Always verify the *running* container's image (`docker ps --format
 * `max_model_len` verified via /v1/models (262144 -> 524288).
 * KV pool + concurrency read from engine boot log on both ranks.
 
-## Open decision (presented to user 2026-08-28)
-512K profile = max context + 1.44M-token pool, costs ~2-3 quality pts and
-drops multimodal. 262K+FP8 fallback = 90/100 (matches/beats baseline), 610K
-pool (still 2x baseline), multimodal ON, but 262K context cap. A 512K+MTP
-k=4 A/B may recover most of the quality while keeping 512K — not yet run.
+## Open decision — RESOLVED 2026-08-28 (k=4 + 9GiB pin A/B)
+Ran the 512K + MTP k=4 A/B with the KV pin dropped 10→9 GiB for activation
+headroom (`exec-vllm-512k-k4.sh`):
+* Booted clean — pool **1,261,444 tok**, 2.41× concurrency @512K, warmup 132 s,
+  zero NVRM OOMs (no need to drop to 8 GiB).
+* **Bench 89/100** (seed-42 hardmode) vs 87 for the k=3/10GiB profile.
+  All four k=3-specific regressions recovered to PASS (TC-21, TC-40, TC-50,
+  TC-58) → the drafter-depth step WAS the main quality cost.
+* One persistent 512K-profile-specific fail remains: **TC-81** (tool-output
+  prompt injection), which fails on both 512K runs regardless of k.
+* **Standing config: k=4 + 9GiB pin (profile in `benchmarks.md` §6).** 512K
+  context, baseline quality, 1.26M pool. See `benchmarks.md` for the full
+  investigation + benchmark log.
 
 ## Rollback
 * Image: `glm53:v8` is still on both nodes (same ID as pre-upgrade).
