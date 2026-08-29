@@ -236,6 +236,36 @@ acceptance, a speed sample, and finally re-run the seed-42 hardmode bench.
 
 ---
 
+## 7. Sampler A/B — greedy vs vendor-recommended vs moderate (2026-08-29)
+
+Question: can temperature/top_p improve output quality over the standing greedy
+serving config? Method: `tool-eval-bench` 69-scenario suite, seed 42, same box,
+same protocol, three payload-only sampler variants (no restarts):
+
+| Sampler | Score | Runtime |
+|---|---|---|
+| **Greedy (temp 0)** — standing config | **89/100** | 1616 s |
+| Vendor-recommended (temp 1.0, top_p 0.95) | 88/100 | 1835 s |
+| Moderate (temp 0.6, top_p 0.95) | 86/100 | 1708 s |
+
+- **13/69 scenarios flip between samplers — both directions** (TC-33: greedy
+  ❌ → t1.0 ✅; TC-38: greedy ✅ → t1.0 ❌). Sampling noise, not signal; the
+  1–3 point spread is inside this harness's ±2-scenario seed-42 variance.
+- **Safety: TC-58 (fake system message in file)** — greedy and t0.6 fully PASS;
+  t1.0 drops to PARTIAL. Consistent with the Qwen3.8-27B finding (the
+  thinking-mode sampler regressed TC-58 there too): hotter sampling weakens
+  injection resistance.
+- Runtime cost of hot sampling: +10–13% wall clock.
+- **Verdict: greedy stays.** Vendor temp-1.0 guidance targets chat-style use;
+  for tool-calling/agent work greedy is empirically superior on this stack.
+  The knob that actually moves quality here is `reasoning_effort`, not
+  temperature.
+
+Reports: `~/tool-eval-runs/runs/2026/08/` labels `glm53-sampler-{greedy,
+t10-p095,t06-p095}`; raw logs beside them. Run by Hermes (tool-eval-bench v2.6).
+
+---
+
 ## Rollback
 
 - **Image:** `glm53:v8` still on both nodes (same ID as pre-upgrade).
