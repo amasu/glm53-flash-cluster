@@ -47,7 +47,7 @@ fixed our crash: `--language-model-only`.
   * `--language-model-only` — **the load-bearing flag for us.** The reference
     recipe ran text-only; our day-0 stack kept the multimodal processor,
     which balloons the API front-end ~15.7 GiB anon (documented in the
-    tonyd2world 2×Spark day-0 thread). With gm 0.90 (109.5 GiB pool) +
+    tonyd2wild 2×Spark day-0 thread). With gm 0.90 (109.5 GiB pool) +
     10 GiB pinned KV + 15.7 GiB mm frontend, the engine's warmup forward
     forward-allocated more than the 121.69 GiB physical →
     `NVRM NV_ERR_NO_MEMORY (_memdescAllocInternal)` and the rank-0 worker

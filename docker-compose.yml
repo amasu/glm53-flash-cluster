@@ -6,7 +6,7 @@
 # Run via cluster.sh (worker rank 1 first, then head rank 0) because vLLM's
 # mp executor requires the worker to be up before the head completes world init.
 #
-# The image (default glm53:v9 = tonyd2world sm_121 patch chain v1→v8 on
+# The image (default glm53:v9 = tonyd2wild sm_121 patch chain v1→v8 on
 # vllm/vllm-openai:glm53-flash-arm64-cu130, plus the v9 512K-context
 # indexer CC-12.x guard from this repo's docker/) is built on the head by
 # build-image.sh and shipped to the worker — this file does NOT build anything.

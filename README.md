@@ -44,7 +44,7 @@ Scripts and compose fail fast with a message naming the missing variable.
   `pe_dim==64`, model is NoPE `qk_rope_head_dim=0`); **SGLang ✅** is the card-blessed
   engine. Upstream vLLM lacks `glm5_next` (PR #53906 open); day-0 image
   `vllm/vllm-openai:glm53-flash-arm64-cu130` works on B200 only.
-- **tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark** — world-first vLLM TP2 on
+- **tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark** — world-first vLLM TP2 on
   2× Spark, same checkpoint, day-0. Root-caused 7 day-0 bugs → patch chain v1→v8:
   NoPE-MLA-for-SM121 (FA2), FlashInfer 0.6.18 nightly (0.6.17 FA2 NaN at 64–256-row
   batches), NCCL 2.30.7 re-pin (nightly → 2.29.7 fabric death), cutlass-dsl 4.6.2,
@@ -66,7 +66,7 @@ Scripts and compose fail fast with a message naming the missing variable.
   `exec-vllm-512k-k4.sh` (= the current default, 89/100),
   `exec-vllm-262k-fp8.sh` (262K + fp8 KV, 610K pool, multimodal ON, 90/100),
   `exec-vllm-v8-262k.sh` (day-0 262K + bf16 KV, 311K pool, 89/100).
-- `build-image.sh` — head: clone tonyd2world repo, build v1→v8, add v9 guard, ship to worker
+- `build-image.sh` — head: clone tonyd2wild repo, build v1→v8, add v9 guard, ship to worker
 - `fetch-weights.sh` — head: HF download + rsync to worker + checksum verify
 - `cluster.sh` + `.env` — orchestrator-side control (preflight/up/down/status/logs)
 - `example.env` — configuration template (copy to `.env`, fill in)
@@ -161,7 +161,7 @@ from these sources:
 
 **Patches & reference deploy**
 
-- [tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark](https://github.com/tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark)
+- [tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark)
   — world-first vLLM TP=2 on 2× DGX Spark. Built the v1→v8 sm_121 patch chain
   (NoPE-MLA for SM121, FlashInfer 0.6.18 nightly, NCCL 2.30.7 re-pin,
   cutlass-dsl 4.6.2, PDL off, indexer top-k hardening, fp8-KV smem-tile fix)
@@ -172,7 +172,7 @@ from these sources:
   (`glm5_next` architecture support, open at the time of writing).
 - [eugr/spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) — the b12x
   Spark serving stack; evaluated as an alternative carrier before choosing the
-  tonyd2world chain (its custom MLA backends target the `pe_dim==64` layout
+  tonyd2wild chain (its custom MLA backends target the `pe_dim==64` layout
   class this model can't use).
 - Model checkpoint: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
   on Hugging Face.

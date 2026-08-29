@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the GLM-5.3-Flash sm_121 patch chain (tonyd2world v1..v8) on the HEAD node,
+# Build the GLM-5.3-Flash sm_121 patch chain (tonyd2wild v1..v8) on the HEAD node,
 # then ship the final image to the worker over the QSFP fabric.
 #
 #   v1 = NoPE-MLA backend for SM121 (FA2 path) on the day-0 image
@@ -30,7 +30,7 @@ cd "$(dirname "$0")"
 : "${WORKER_IP:?set WORKER_IP in .env (see example.env)}"
 IMAGE="${IMAGE:-glm53:v9}"
 
-REPO_DIR="${REPO_DIR:-$HOME/glm53-flash-cluster/tonyd2world-repo}"
+REPO_DIR="${REPO_DIR:-$HOME/glm53-flash-cluster/tonyd2wild-repo}"
 BASE_IMAGE="${BASE_IMAGE:-vllm/vllm-openai:glm53-flash-arm64-cu130}"
 # production chain: Dockerfile source file -> output tag
 STAGES=(
@@ -51,8 +51,8 @@ FINAL_IMAGE="$IMAGE"
 WORKER_SSH="${WORKER_SSH:-ssh $WORKER_IP}"
 
 if [[ ! -f "$REPO_DIR/docker/Dockerfile.glm53-sm121" ]]; then
-  echo "==> Cloning tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark"
-  git clone https://github.com/tonyd2world/GLM-5.3-Flash-NVFP4-262K-2x-DGX-Spark "$REPO_DIR"
+  echo "==> Cloning tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark"
+  git clone https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark "$REPO_DIR"
 fi
 cd "$REPO_DIR/docker"
 

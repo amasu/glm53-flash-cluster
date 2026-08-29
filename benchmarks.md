@@ -7,7 +7,7 @@ sizes, and the crash forensics. Updated as each experiment lands.
 - **Model:** `LibertAIDAI/GLM-5.3-Flash-NVFP4` (320B total / 18B active, 181 GiB, `glm5_next` NoPE sparse-MLA + KDA)
 - **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `aitopatom-6253` (rank 0, 10.100.90.1), worker `10.100.90.4` (rank 1, headless).
 - **Endpoint:** `http://aitopatom-6253.local:8000/v1` — served name `glm-5.3-flash` (Hermes default provider).
-- **Image:** `glm53:v9` (tonyd2world sm_121 patch chain v1→v8 + the CC-12.x sparse-MLA indexer guard). `glm53:v8` retained on both nodes for rollback.
+- **Image:** `glm53:v9` (tonyd2wild sm_121 patch chain v1→v8 + the CC-12.x sparse-MLA indexer guard). `glm53:v8` retained on both nodes for rollback.
 - **Bench harness:** `tool-eval-bench` v2.6.1.dev24, hardmode, **seed 42**, 88 scenarios, c1 sequential, thinking enabled, temperature 0.0. Reports in `runs/`, raw scores in `data/benchmarks.sqlite`.
 
 > Note: this is the **GLM-5.3-Flash** provider (k=MTP, 9GiB pin, 512K, 1.44M pool).
@@ -37,7 +37,7 @@ day-0 bf16 baseline pool (311,419 tok). Concurrency is the engine's
 Model card says on GB10/sm_121: **vLLM ❌** (sm_121 MLA kernel asserts
 `pe_dim==64`, model is NoPE `qk_rope_head_dim=0`) / **SGLang ✅** blessed.
 Upstream vLLM lacks `glm5_next`. So the whole thing runs on the community
-`tonyd2world/GLM-5.3-Flash-NVFP4-*` sm_121 patch chain (v1→v8), which fixed 7
+`tonyd2wild/GLM-5.3-Flash-NVFP4-*` sm_121 patch chain (v1→v8), which fixed 7
 day-0 bugs:
 
 - NoPE-MLA-for-SM121 (FA2 attention)
@@ -134,8 +134,8 @@ with the MTP-assisted 2× Spark numbers, ahead of the bf16 day-0 rate.
 
 ### Community reference points (same model, GB10, for calibration)
 - **2× Spark day-0 (first published deploy):** 24.7–30.3 tok/s with MTP-5.
-- **2× Spark, tonyd2world checkpoint (FP8 KV + MTP):** 43.4 tok/s PEAK.
-- **2× Spark tonyd2world:** ~14.3 tok/s bf16 KV / ~21.8 tok/s fp8 KV + MTP-4.
+- **2× Spark, tonyd2wild checkpoint (FP8 KV + MTP):** 43.4 tok/s PEAK.
+- **2× Spark tonyd2wild:** ~14.3 tok/s bf16 KV / ~21.8 tok/s fp8 KV + MTP-4.
 - **3× Spark, TP=3, 512K ctx:** 35 tok/s, KV pool 1.505M (2.87×).
 - **4× Spark, TP=4, 262K ctx:** 36 tok/s, 1.26M-token FP8 KV pool.
 
