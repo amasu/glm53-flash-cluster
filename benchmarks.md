@@ -264,6 +264,23 @@ same protocol, three payload-only sampler variants (no restarts):
 Reports: `~/tool-eval-runs/runs/2026/08/` labels `glm53-sampler-{greedy,
 t10-p095,t06-p095}`; raw logs beside them. Run by Hermes (tool-eval-bench v2.6).
 
+### 7.1 `reasoning_effort=max` addendum (same day)
+
+Probe confirmed the knob works: default ≈ deep thinking (1,038 completion tok
+on a test prompt), `low`/`high` shallow (~400 tok), `max` deepest (1,150 tok).
+Full 69-scenario run with `--backend-kwargs '{"reasoning_effort": "max"}'`:
+
+| Config | Score | Runtime |
+|---|---|---|
+| Default (greedy, deep thinking) | 89/100 | 1616 s |
+| `reasoning_effort=max` | 88/100 | 1610 s |
+
+**Verdict: no gain.** The default profile already reasons at near-max depth on
+tool-call scenarios, so forcing max changes nothing measurable — 88 vs 89 is
+harness variance (±2 at seed 42). Downgrading effort to `low`/`high` would cut
+thinking tokens ~60% for latency gains, at unknown quality cost (untested).
+Default greedy remains the standing config.
+
 ---
 
 ## Rollback
