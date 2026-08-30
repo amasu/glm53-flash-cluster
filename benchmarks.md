@@ -283,6 +283,58 @@ Default greedy remains the standing config.
 
 ---
 
+## 8. Lab-quant swap (2026-08-30) — `local-inference-lab` mixed-precision, the standing config
+
+Replaced the LibertAIDAI uniform-NVFP4 quant with `local-inference-lab/GLM-5.3-Flash-NVFP4`
+@ rev `378ca545…` (MIXED_PRECISION: NVFP4 experts layers 3–44 g16 + **MXFP8 MTP drafter**
+layer 45 g32, ~186 GB, KLD ~0.04). Recipe: kilork gist `a887667f` (92/100 hardmode claim)
+via the `0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks` packaging. New image `glm53:lab` = day-0
+base (digest-pinned `905c0293…`) + the 5 lab patches (modelopt MTP-namespace fix + quantprobe,
+naming shim, CC-12.x indexer guards, NoPE-MLA rope-pad). Served on :8000 under the same
+`glm-5.3-flash` name; single-stack policy (the old `vllm_glm53_head/worker` was stopped first).
+
+### Boot markers (all matched the gist)
+- Weight load: `Model loading took 92.19 GiB and 803 s`
+- quantprobe: `quantization=modelopt_mixed`, layers 3–44 `algo=NVFP4` (MTP namespace fix live —
+  without modelopt.patch this dies with `KeyError model.layers.45.mtp_block…w2_weight_scale`)
+- `GPU KV cache size: 1,164,369 tokens` = 2.22× @512K — **exact match** to the gist's boot marker
+- `Application startup complete` (~17 min cold)
+
+### Result (seed-42 hardmode, 88 scenarios, c1, ~39 min)
+| profile | image | quant | quality | pool |
+|---|---|---|---|---|
+| 3 (k=4, 9GiB pin) — previous standing | glm53:v9 | LibertAIDAI NVFP4 | 89/100 (157/176) | 1.26M |
+| **8 (lab-quant, MTP-3, 10GiB pin) — ACTIVE** | glm53:lab | **lab MIXED** | **90/100 (156/174)** | **1,164,369 (2.22×)** |
+
+Per-scenario diff vs the k4 baseline (same seed 42):
+- **Recovered:** TC-51 fail→partial, TC-53 partial→pass, TC-61 fail→partial, TC-67 partial→pass,
+  **TC-81 tool-output-injection fail→pass** (the one persistent 512K-profile miss is gone).
+- Regressed: TC-50 pass→**fail (all connection attempts failed — transient harness/client drop,
+  not model; endpoint healthy pre+post)**, TC-68 pass→fail, TC-75 pass→partial, TC-80 pass→fail.
+- Net: +1 on the headline score; category deltas favor **Autonomous Planning 50→83** and
+  **Multi-Step Chains 75→88**, offset by Structured Output 92→83 / Hard Mode 92→89.
+- Verdict: **lab-quant is the new standing config** — real gain (injection robustness +
+  planning/chains), within ±2 of the k4 baseline overall. MTP-3 is the gist's proven depth for
+  THIS quant (accept ~2.8–3.0, 61–67% draft acceptance @ c1). Speed in the 24–30 tok/s band.
+
+### Rollback (lab → old LibertAIDAI k4 profile)
+```
+lab-launch.sh down                                   # stop the lab stack on :8000
+# then restore the old profile: on BOTH nodes
+cp exec-vllm-512k-k4.sh exec-vllm.sh
+cluster.sh up
+```
+- Old weights still on both nodes: `/var/tmp/glm-5.3-flash-nvfp4` (LibertAIDAI, 182 GB).
+- Old image `glm53:v9` still on both nodes. `cluster.sh` / `exec-vllm-*.sh` unchanged.
+- Lab weights kept at `/var/tmp/glm-5.3-flash-lab-nvfp4` on both nodes (re-boot in minutes via
+  `lab-launch.sh up`); lab image `glm53:lab` retained on both nodes.
+- Lab launch files live in `~/glm53-lab/` on both nodes (`docker-compose-lab.yaml`,
+  `lab-launch.sh`); local source of truth: `glm53-flash-cluster/lab/`.
+- **Gotcha hit this round:** the lab compose needed `cap_add: [IPC_LOCK]` + `ulimits.memlock=-1`
+  (matching the old docker-compose.yml) or NCCL `ibv_reg_mr_iova2` → `Cannot allocate memory`
+  on world-init. Also: `lab-launch.sh` is a Mac-orchestrator tool (two-hop ssh); run it from the
+  Mac, not the head.
+
 ## Rollback
 
 - **Image:** `glm53:v8` still on both nodes (same ID as pre-upgrade).
