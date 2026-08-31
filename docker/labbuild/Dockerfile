@@ -3,7 +3,7 @@
 #
 # Same day-0 base + NoPE-MLA mod as docker-images/glm53-flash-nvfp4, PLUS the
 # four lab-checkpoint patches from FujitsuPolycom/glm53-flash-tp2-spark
-# (Apache-2.0, attribution in patches/UPSTREAM.md):
+# (Apache-2.0, attribution in UPSTREAM.md next to this Dockerfile):
 #   * model.patch               — checkpoint naming shim (attn_hc.* submodules,
 #                                 forget_gate flatten, fused [3C,1,4] conv1d split)
 #   * modelopt.patch            — MTP MIXED_PRECISION fix: the draft model

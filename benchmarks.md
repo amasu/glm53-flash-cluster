@@ -12,7 +12,7 @@ sizes, and the crash forensics. Updated as each experiment lands.
 - **Endpoint:** `http://aitopatom-6253.local:8000/v1` — served name `glm-5.3-flash` (Hermes default provider).
 - **Image (ACTIVE):** `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad). `glm53:v9` (tonyd2wild chain) retained on both nodes for rollback.
 - **Bench harness:** `tool-eval-bench` (dev24 → dev32 over the log's lifetime; see §Methodology), hardmode, **seed 42**, 88 scenarios. Two protocols were used: **c1/greedy** (standing quality protocol) and the **0rand-param replica** (parallel 4, trials 2, temp 0.1 — see §8).
-- **Watchdog:** `lab/lab-watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the stack if down.
+- **Watchdog:** `watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the configured stack if down.
 
 > Note: this is the **GLM-5.3-Flash** provider (lab-quant, 10 GiB pin, 512K, 1.16M pool).
 > It is a different deployment from the DeepSeek-V4-Flash-0731 research tracked in
@@ -435,49 +435,52 @@ concurrency headroom.
 
 ## Rollback
 
-**Current ACTIVE stack** = lab-quant (`glm53:lab`, `lab/docker-compose-lab.yaml`,
-`lab-launch.sh`), serving :8000 under the name `glm-5.3-flash`. Rollback in
-either direction is a few minutes:
+**Current ACTIVE stack** = lab-quant (`glm53:lab`, `stacks/lab.env`,
+`docker-compose.yml`), serving :8000 under the name `glm-5.3-flash`.
 
-- **lab → old LibertAIDAI k4 profile** (profiles 0–3):
+Since 2026-08-31 all stacks share ONE code base (`docker-compose.yml` +
+`exec-vllm.sh` + `cluster.sh`); a stack is a config file under `stacks/`, so
+rollback / stack-switching is a config change, not a code change:
+
+- **any stack → any other stack** (e.g. lab → LibertAIDAI k4):
   ```
-  cd glm53-flash-cluster/lab && bash lab-launch.sh down      # stop the lab stack on :8000
-  # on BOTH nodes:
-  cp exec-vllm-512k-k4.sh exec-vllm.sh                       # the 89/100 standing LibertAIDAI profile
-  cd glm53-flash-cluster && bash cluster.sh up               # worker first, then head
+  cd glm53-flash-cluster && cluster.sh v9-512k takeover
   ```
-  Old LibertAIDAI weights (182 GB) + `glm53:v9` image are still on both nodes.
-  `cluster.sh` / `exec-vllm-*.sh` are unchanged by the lab work.
-- **old LibertAIDAI → lab** (re-promote):
-  `cluster.sh down` then `cd lab && bash lab-launch.sh up`.
-  Lab weights (`/var/tmp/glm-5.3-flash-lab-nvfp4`) + `glm53:lab` image retained on
-  both nodes, so this re-boots in ~17 min.
-- **Other LibertAIDAI profiles** (if the k4 line is ever reverted): on both nodes,
-  `cp exec-vllm-<profile>.sh exec-vllm.sh`, then `cluster.sh down && cluster.sh up`.
-  - `exec-vllm-v8-262k.sh` → day-0 bf16 262K, 89/100 (311K pool).
-  - `exec-vllm-262k-fp8.sh` → 262K + FP8, 90/100 (610K pool, multimodal ON).
-  - `exec-vllm-512k.sh` → 512K + 10GiB pin + MTP-3, 87/100 (1.44M pool).
-- **Image fallback:** `glm53:v8` (day-0) still on both nodes; `glm53:v9` is the
-  LibertAIDAI 512K image; `glm53:lab` is the current lab image.
-- Boot ~14–17 min cold (weights ~13 min + warmup); worker must start before head
-  to complete world init.
+  `takeover` stops whatever is running (single-stack policy), drops page
+  caches, then brings up the named stack with the shared compose file. The
+  `STACK` arg overrides the `.env` default; `cluster.sh v9-512k up` does the
+  same without the down-wait if the port is already free.
+- **Profiles available** (file → legacy name → quality):
+  - `stacks/v9-512k.env` → old `exec-vllm-512k-k4.sh`, 512K + fp8 9 GiB pin + MTP-4, 89/100 (primary rollback)
+  - `stacks/v9-512k.env` with `MAX_NUM_BATCHED_TOKENS=1024…` — the 87/100 MTP-3 10 GiB variant is not pinned as a file; it was the step-2 A/B point, see §6.
+  - `stacks/v9-262k-fp8.env` → old `exec-vllm-262k-fp8.sh`, 262K + FP8, 90/100 (610K pool, mm ON)
+  - `stacks/v8-262k.env` → old `exec-vllm-v8-262k.sh`, day-0 bf16 262K, 89/100 (311K pool)
+- **Image fallback:** `glm53:v9` and `glm53:lab` are both built from the
+  vendored context and retained on both nodes; rebuild with
+  `build-image.sh` / `docker/lab-build.sh`.
+- Boot ~14–17 min cold (weights ~13 min + warmup); worker must start before
+  head to complete world init.
+
+> The pre-restructure rollback recipe (`lab-launch.sh down` +
+> `cp exec-vllm-<profile>.sh exec-vllm.sh`) is historical: those per-profile
+> entrypoint scripts and the `lab/` launch tree no longer exist (replaced by
+> `stacks/*.env` + `cluster.sh`).
 
 ## Ops notes
 
 - Orchestrator (Mac) → head: `ssh aitopatom-6253.local`; worker is two-hop:
   `ssh 6253 "ssh 10.100.90.4 ..."` (direct ssh to .90.4 times out).
-- `cluster.sh <preflight|up|down|status|logs>` (LibertAIDAI stack); `lab/lab-launch.sh
-  <takeover|up|down|status|logs>` (lab stack). `up` drops page caches on both nodes
-  first (GB10 unified memory), launches worker rank 1 then head rank 0. **Single-stack
-  policy:** only one GLM stack serves :8000 at a time; `lab-launch.sh takeover` stops
-  the other before bringing the lab up.
-- `lab/lab-watchdog.sh` (Mac cron `glm-lab-watchdog`, every 15 min): probes :8000,
-  auto-restarts the lab stack if down (skips if the container is <35 min old, i.e.
-  mid-boot). Log: `/tmp/glm53-lab-watchdog.log`.
+- `cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>` drives
+  every stack with the same command shape; `up` launches worker rank 1 then
+  head rank 0. **Single-stack policy:** only one GLM stack serves :8000 at a
+  time; `takeover` stops the other before bringing the requested one up.
+- `watchdog.sh` (Mac cron `glm-lab-watchdog`, every 15 min): probes :8000,
+  auto-restarts the `.env`-configured stack if down (skips if the container is
+  <35 min old, i.e. mid-boot). Log: `/tmp/glm53-watchdog.log`.
 - `.env` lives in 3 places (orchestrator + head + worker REMOTE_DIR); keep in
-  sync. The lab compose files (`lab/docker-compose-lab*.yaml`) read it via
-  `--env-file .env` from `~/glm53-lab` on each node; `lab-launch.sh` honors
-  `LAB_STACK` (lab | lab-vision), and explicit env vars win over `.env`.
+  sync — `cluster.sh mirror` ships it together with the repo. Each node
+  sources `.env` + `stacks/<STACK>.env` from its own `REMOTE_DIR`, exactly as
+  the orchestrator does, so orchestrator and node always agree on the flags.
 - `data/` and `runs/` are gitignored (local bench artifacts).
 
 ## 9. lab-vision profile (2026-08-31) — vision ON, 0rand #130 shape

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Build the lab-quant image (glm53:lab) from the vendored build context in
-# lab/build/, on the HEAD node, then ship it to the WORKER node.
+# Build the lab-quant image (default glm53:lab, overridable via LAB_IMAGE)
+# from the vendored build context in docker/labbuild/, on the HEAD node, then
+# ship it to the WORKER node.
 #
 # Host-agnostic: HEAD_HOST / WORKER_IP / REMOTE_DIR from .env; image tag from
-# LAB_IMAGE (default glm53:lab). Run from the orchestrator (Mac or any machine
-# with ssh to the head). The build is fast (~30 s): the day-0 base is pulled
-# by digest and only the patch layer is rebuilt. All patches apply with zero
-# fuzz against the pinned base — provenance in lab/build/UPSTREAM.md.
+# LAB_IMAGE (default glm53:lab). Run from the orchestrator (Mac or any
+# machine with ssh to the head). The build is fast (~30 s): the day-0 base is
+# pulled by digest and only the patch layer is rebuilt. All patches apply
+# with zero fuzz against the pinned base — provenance in
+# docker/labbuild/UPSTREAM.md.
 #
 # To build while sitting ON the head node instead:
-#   cd lab/build && docker build -t glm53:lab . && ssh $WORKER_IP 'docker load' < <(docker save glm53:lab)
+#   cd docker/labbuild && docker build -t glm53:lab . \
+#     && ssh $WORKER_IP 'docker load' < <(docker save glm53:lab)
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root
 
@@ -18,14 +21,14 @@ if [ -f .env ]; then set -a; . .env; set +a; fi
 : "${WORKER_IP:?WORKER_IP must be set in .env or environment}"
 : "${REMOTE_DIR:?REMOTE_DIR must be set in .env or environment}"
 LAB_IMAGE="${LAB_IMAGE:-glm53:lab}"
-BUILD_DIR_NAME="lab/build"
+BUILD_DIR_NAME="docker/labbuild"
 REMOTE_BUILD_DIR="$REMOTE_DIR/$BUILD_DIR_NAME"
 
 # Inner script executed ON THE HEAD: build, self-verify markers, ship to worker.
 read -r -d '' INNER <<EOF || true
 set -euo pipefail
 cd '${REMOTE_BUILD_DIR}'
-echo '==> Building ${LAB_IMAGE} from lab/build/ (digest-pinned base)'
+echo '==> Building ${LAB_IMAGE} from docker/labbuild/ (digest-pinned base)'
 docker build -t '${LAB_IMAGE}' .
 echo '==> Verifying patch markers in the built image'
 docker run --rm '${LAB_IMAGE}' bash -lc \
@@ -37,9 +40,9 @@ echo '==> Done: ${LAB_IMAGE} on both nodes'
 EOF
 INNER_B64=$(printf '%s' "$INNER" | base64 | tr -d '\n')
 
-echo "==> Mirroring lab/build/ to the head at ${REMOTE_BUILD_DIR}"
+echo "==> Mirroring docker/labbuild/ to the head at ${REMOTE_BUILD_DIR}"
 ssh -T "$HEAD_HOST" "mkdir -p '${REMOTE_BUILD_DIR}'"
-rsync -a ./lab/build/ "$HEAD_HOST:$REMOTE_BUILD_DIR/"
+rsync -a "./${BUILD_DIR_NAME}/" "$HEAD_HOST:$REMOTE_BUILD_DIR/"
 
 echo "==> Building on the head (this may pull the day-0 base first time)"
 ssh -T "$HEAD_HOST" "echo '$INNER_B64' | base64 -d | bash"

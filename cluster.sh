@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# Orchestrate the GLM-5.3-Flash vLLM TP=2 cluster from the orchestrator (e.g. a Mac).
-# The head and worker run the same docker-compose.yml; launch order is enforced
-# here (worker rank 1 first, head rank 0 second) per the mp executor's requirement.
+# Orchestrate the GLM-5.3-Flash vLLM TP=2 cluster from the orchestrator (e.g.
+# a Mac). ONE compose file (docker-compose.yml) + ONE entrypoint
+# (exec-vllm.sh) serve every stack: the stack is pure configuration, sourced
+# from stacks/<STACK>.env — on the orchestrator AND on each node, so every
+# stack runs the exact same code with only different variables.
 #
-# Host-agnostic: all site-specific values come from .env (see example.env).
+# Host-agnostic: site values come from .env (see example.env).
 #
-# usage: cluster.sh <preflight|up|down|status|logs>
+# usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>
+#   STACK   optional; default from STACK in .env (currently: lab)
+#           available: lab lab-vision v9-512k v9-262k-fp8 v8-262k
+#   mirror   = rsync repo (incl. .env + stacks/) to both nodes at REMOTE_DIR
+#   takeover = down (any stale stack) + drop caches -> up <STACK>
+#   NOTE: SINGLE-STACK POLICY — one profile runs at a time; `down` removes
+#         any glm53 rank containers regardless of which stack they belong to.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -16,8 +24,24 @@ set -a; source .env; set +a
 : "${WORKER_IP:?set WORKER_IP in .env (see example.env)}"
 : "${REMOTE_DIR:?set REMOTE_DIR in .env (see example.env)}"
 SERVING_PORT="${SERVING_PORT:-8000}"
-WEIGHTS_DIR="${WEIGHTS_DIR:-/var/tmp/glm-5.3-flash-nvfp4}"
-IMAGE="${IMAGE:-glm53:v8}"
+
+# -------- stack resolution --------------------------------------------------
+# STACK arg (e.g. `cluster.sh v9-512k up`) wins over .env; default = lab
+STACK="${STACK:-lab}"
+if [[ "${1:-}" =~ ^(lab|lab-vision|v9-512k|v9-262k-fp8|v8-262k)$ ]]; then
+  STACK="$1"; shift
+fi
+STACK_FILE="stacks/${STACK}.env"
+[[ -f "$STACK_FILE" ]] || { echo "FATAL: unknown/missing stack '$STACK' (want one of: lab lab-vision v9-512k v9-262k-fp8 v8-262k; file $STACK_FILE)" >&2; exit 1; }
+
+# Layering: site .env (already sourced) <- stack file (sourced later, wins:
+# pins its knobs + maps its image/weights/ports). The stack file may
+# reference site vars (e.g. WEIGHTS_DIR_LAB from .env) via ${VAR:?}
+# expansions, which fail fast here if the site value is missing.
+set -a; source "$STACK_FILE"; set +a
+
+echo "==> stack: $STACK (file: $STACK_FILE)"
+echo "    image=$IMAGE weights=$WEIGHTS_DIR master_port=$MASTER_PORT"
 
 HEAD_SSH="ssh $HEAD_HOST"
 
@@ -28,62 +52,102 @@ HEAD_SSH="ssh $HEAD_HOST"
 run_worker() {
   local b64
   b64=$(printf '%s' "$1" | base64 | tr -d '\n')
-  # Orchestrator expands $b64 (defined here) into the string; inner single-quotes
-  # keep it one token across the head hop; worker runs: echo <b64> | base64 -d | bash
   ssh -T "$HEAD_HOST" "ssh -T $WORKER_IP 'echo \"$b64\" | base64 -d | bash'"
 }
+
+# Node-side environment: the node runs compose from $REMOTE_DIR, sourcing the
+# SAME two files as the orchestrator — site .env (a mirror of this one) plus
+# the stack file. Sourcing the stack file AFTER the site .env keeps the
+# orchestrator and node in exact agreement: stack file wins.
+NODE_ENV="set -a; . ./.env; . ./$STACK_FILE; set +a"
 
 preflight() {
   $HEAD_SSH "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"HEAD: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"HEAD: port $SERVING_PORT free\""
   run_worker "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"WORKER: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"WORKER: port $SERVING_PORT free\""
+  $HEAD_SSH "cd '$REMOTE_DIR' && test -f '$STACK_FILE' || { echo 'HEAD: $STACK_FILE MISSING — run: cluster.sh mirror'; exit 1; }"
+  run_worker "cd '$REMOTE_DIR' && test -f '$STACK_FILE' || { echo 'WORKER: $STACK_FILE MISSING — run: cluster.sh mirror'; exit 1; }"
   run_worker "test -f \"$WEIGHTS_DIR/config.json\" && echo 'WORKER: weights staged' || { echo 'WORKER: weights MISSING'; exit 1; }"
   $HEAD_SSH "test -f \"$WEIGHTS_DIR/config.json\" && echo 'HEAD: weights staged' || { echo 'HEAD: weights MISSING'; exit 1; }"
   run_worker "docker image inspect \"$IMAGE\" >/dev/null && echo 'WORKER: image present' || { echo 'WORKER: image MISSING'; exit 1; }"
   $HEAD_SSH "docker image inspect \"$IMAGE\" >/dev/null && echo 'HEAD: image present' || { echo 'HEAD: image MISSING'; exit 1; }"
-  echo "preflight OK"
+  echo "preflight OK [$STACK]"
+}
+
+mirror() {
+  echo "==> Mirroring repo (incl. .env + stacks/) to head $HEAD_HOST:$REMOTE_DIR"
+  $HEAD_SSH "mkdir -p '$REMOTE_DIR'"
+  rsync -a ./ "$HEAD_HOST:$REMOTE_DIR/"
+  echo "==> Mirroring repo (incl. .env + stacks/) to worker $WORKER_IP:$REMOTE_DIR (via head)"
+  run_worker "mkdir -p '$REMOTE_DIR'"
+  # Ship head -> worker: source .env on the head for WORKER_IP (not in login env)
+  $HEAD_SSH "cd '$REMOTE_DIR' && set -a; . ./.env; set +a; rsync -a . \"\$WORKER_IP:$REMOTE_DIR/\""
+  echo "==> mirrored to both nodes"
 }
 
 up() {
-  # Pre-launch ritual: drop page caches on both nodes (GB10 unified memory)
-  $HEAD_SSH 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
-  run_worker 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
-
-  echo "==> Stopping any stale rank containers"
-  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
-  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
-
+  # Launch order is load-bearing (mp executor rendezvous): worker rank 1
+  # first, then head rank 0.
   echo "==> Launching WORKER (rank 1) first"
-  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env up -d glm53-worker"
+  run_worker "cd '$REMOTE_DIR' && $NODE_ENV && docker compose up -d glm53-worker"
   sleep 20
-  run_worker "docker ps --filter name=vllm_glm53_worker --format '{{.Names}} {{.Status}}'"
+  run_worker "docker ps --filter name=glm53-worker --format '{{.Names}} {{.Status}}'"
 
   echo "==> Launching HEAD (rank 0)"
-  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env up -d glm53-head"
+  $HEAD_SSH "cd '$REMOTE_DIR' && $NODE_ENV && docker compose up -d glm53-head"
 
-  echo "==> Both ranks up. Engine takes 14-21 min (warm caches faster)."
-  echo "    Watch:  cluster.sh logs"
+  echo "==> Both ranks up [$STACK]. Engine takes 14-21 min (warm caches faster)."
+  echo "    Watch:  cluster.sh $STACK logs"
 }
 
 down() {
-  # Hard-won rule: tear down BOTH ranks (worker first is irrelevant; both must go)
-  $HEAD_SSH "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
-  run_worker "cd '$REMOTE_DIR' && docker compose --env-file .env down --remove-orphans 2>/dev/null || true"
+  # Hard-won rule: tear down BOTH ranks (worker first is irrelevant; both must
+  # go). Single-stack policy: target the known container names so any
+  # previously-running stack (new or legacy) is cleared without knowing which
+  # one it was.
+  $HEAD_SSH "docker rm -f glm53-head glm53-lab-head glm53-vision-head vllm_glm53_head vllm_glm53_lab_head vllm_glm53_vision_head 2>/dev/null | true"
+  run_worker "docker rm -f glm53-worker glm53-lab-worker glm53-vision-worker vllm_glm53_worker vllm_glm53_lab_worker vllm_glm53_vision_worker 2>/dev/null | true"
   echo "both ranks stopped"
 }
 
+takeover() {
+  echo "==> Takeover: stopping any stale stack, then bringing up [$STACK]"
+  down
+  echo "==> Waiting for :$SERVING_PORT to free"
+  local i
+  for i in $(seq 1 60); do
+    if $HEAD_SSH "ss -ltn | grep -q ':${SERVING_PORT}\\b'"; then
+      echo "port $SERVING_PORT still busy (round $i/60, 10s)"; sleep 10
+    else
+      echo "port $SERVING_PORT free"; break
+    fi
+  done
+  echo "==> Dropping page caches"
+  $HEAD_SSH 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
+  run_worker 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
+  up
+}
+
 status() {
-  echo "--- containers ---"
-  $HEAD_SSH "docker ps -a --filter name=vllm_glm53 --format 'HEAD   {{.Names}} | {{.Status}}'"
-  run_worker "docker ps -a --filter name=vllm_glm53 --format 'WORKER {{.Names}} | {{.Status}}'"
+  echo "--- containers [$STACK] ---"
+  $HEAD_SSH "docker ps -a --filter name=glm53 --format 'HEAD   {{.Names}} | {{.Status}}'"
+  run_worker "docker ps -a --filter name=glm53 --format 'WORKER {{.Names}} | {{.Status}}'"
   echo "--- endpoint ---"
-  curl -fsS "http://$HEAD_HOST:$SERVING_PORT/v1/models" 2>/dev/null && echo || echo "endpoint not answering yet"
+  curl -fsS "http://$HEAD_HOST:$SERVING_PORT/v1/models" 2>/dev/null | head -c 400 && echo || echo "endpoint not answering yet"
 }
 
 logs() {
-  $HEAD_SSH "docker logs -f --tail 40 vllm_glm53_head"
+  $HEAD_SSH "docker logs -f --tail 40 glm53-head"
 }
 
 case "${1:-}" in
-  preflight|up|down|status|logs) "$1" ;;
-  *) echo "usage: cluster.sh <preflight|up|down|status|logs>" >&2; exit 1 ;;
+  preflight) preflight ;;
+  mirror)    mirror ;;
+  up)        up ;;
+  down)      down ;;
+  status)    status ;;
+  logs)      logs ;;
+  takeover)  takeover ;;
+  *) echo "usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>" >&2
+     echo "  STACK: lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k (default: \$STACK from .env = lab)" >&2
+     exit 1 ;;
 esac
