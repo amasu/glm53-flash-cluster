@@ -8,7 +8,7 @@
 # Host-agnostic: site values come from .env (see example.env).
 #
 # usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>
-#   STACK   optional; default from STACK in .env (currently: lab)
+# STACK   optional; default from STACK in .env (currently: lab-vision)
 #           available: lab lab-vision v9-512k v9-262k-fp8 v8-262k
 #   mirror   = rsync repo (incl. .env + stacks/) to both nodes at REMOTE_DIR
 #   takeover = down (any stale stack) + drop caches -> up <STACK>
@@ -26,8 +26,9 @@ set -a; source .env; set +a
 SERVING_PORT="${SERVING_PORT:-8000}"
 
 # -------- stack resolution --------------------------------------------------
-# STACK arg (e.g. `cluster.sh v9-512k up`) wins over .env; default = lab
-STACK="${STACK:-lab}"
+# STACK arg (e.g. `cluster.sh v9-512k up`) wins over .env; default = lab-vision
+# (the actual production profile; see the running glm53-vision-* containers)
+STACK="${STACK:-lab-vision}"
 if [[ "${1:-}" =~ ^(lab|lab-vision|v9-512k|v9-262k-fp8|v8-262k)$ ]]; then
   STACK="$1"; shift
 fi
@@ -148,6 +149,6 @@ case "${1:-}" in
   logs)      logs ;;
   takeover)  takeover ;;
   *) echo "usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>" >&2
-     echo "  STACK: lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k (default: \$STACK from .env = lab)" >&2
+     echo "  STACK: lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k (default: \$STACK from .env = lab-vision)" >&2
      exit 1 ;;
 esac
