@@ -174,8 +174,45 @@ from these sources:
   Spark serving stack; evaluated as an alternative carrier before choosing the
   tonyd2wild chain (its custom MLA backends target the `pe_dim==64` layout
   class this model can't use).
-- Model checkpoint: [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
-  on Hugging Face.
+
+**Checkpoints & quantizations**
+
+- Upstream model: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
+  (320B MoE, released 2026-08-26) — the checkpoints below are NVFP4
+  quantizations of it.
+- [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
+  — the uniform-NVFP4 quant staged by `fetch-weights.sh` (the v8/v9 profiles,
+  89–90/100).
+- [local-inference-lab/GLM-5.3-Flash-NVFP4](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-NVFP4)
+  — mixed-precision quant (NVFP4 experts + MXFP8 MTP drafter) behind the
+  current standing lab-quant stack `(glm53:lab)`, 90/100.
+- [0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks](https://github.com/0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks)
+  — packaging of the lab quant for 2× Spark; the `lab/` stack is built on it.
+
+**512K-context & lab-quant recipes**
+
+- NVIDIA forum thread [GLM-5.3-Flash: 320B total parameters / 18B active](https://forums.developer.nvidia.com/t/glm-5-3-flash-320b-total-parameters-18b-active/381350)
+  — the community thread behind most of the current config:
+  - **post 55 (0rand)** — the 512K-context recipe whose reference memory
+    shaping `exec-vllm-512k.sh` and `lab/docker-compose-lab.yaml` follow.
+  - **post #124 (0rand)** — the proven sampling config (temp 0.1, parallel 4,
+    2 trials) and the `1024/16` batched-tokens/num-seqs server flags that our
+    0rand-replica benchmark (benchmarks.md §8) reproduces within 1 pt.
+- [FujitsuPolycom/glm53-flash-tp2-spark](https://github.com/FujitsuPolycom/glm53-flash-tp2-spark)
+  (Apache-2.0) — the `sparse_attn_indexer*.patch` pair that
+  `docker/patch_v9_512k.py` mirrors for the CC-12.x sparse-MLA indexer guard;
+  without it GB10 hard-aborts at 512K shapes (`persistent_topk` CTA
+  oversubscription) — see `NOTES-512k.md`.
+- **kilork** — the `local-inference-lab` mixed-precision recipe (gist
+  `a887667f`, 92/100 hardmode claim) that the lab-quant swap follows; served
+  boot markers (KV pool 1,164,369 tokens) match it exactly. Linked from the
+  [local-inference-lab model card](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-NVFP4).
+
+**Benchmark harness**
+
+- [SeraphimSerapis/tool-eval-bench](https://github.com/SeraphimSerapis/tool-eval-bench)
+  — the harness that produces every quality score in this repo (seed-42
+  hardmode, 88 scenarios); see benchmarks.md §Methodology for the protocols.
 
 **NVIDIA DGX Spark / GB10 forum threads** (failure classes that shaped the ops
 rules — launch order, both-rank teardown, no crash-looping):
