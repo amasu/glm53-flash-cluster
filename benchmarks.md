@@ -474,6 +474,48 @@ either direction is a few minutes:
 - `lab/lab-watchdog.sh` (Mac cron `glm-lab-watchdog`, every 15 min): probes :8000,
   auto-restarts the lab stack if down (skips if the container is <35 min old, i.e.
   mid-boot). Log: `/tmp/glm53-lab-watchdog.log`.
-- `.env` lives in 3 places (orchestrator + head + worker REMOTE_DIR); keep in sync.
-  `lab/docker-compose-lab.yaml` is self-contained (no `.env`).
+- `.env` lives in 3 places (orchestrator + head + worker REMOTE_DIR); keep in
+  sync. The lab compose files (`lab/docker-compose-lab*.yaml`) read it via
+  `--env-file .env` from `~/glm53-lab` on each node; `lab-launch.sh` honors
+  `LAB_STACK` (lab | lab-vision), and explicit env vars win over `.env`.
 - `data/` and `runs/` are gitignored (local bench artifacts).
+
+## 9. lab-vision profile (2026-08-31) — vision ON, 0rand #130 shape
+
+**Goal:** match 0rand's "vision enabled" setup (forum #381350 #123/#127/#130)
+on our lab stack, on :8000 as the serving endpoint, without breaking the
+standing LMO profile.
+
+**Recipe (0rand's #127/#130 delta, applied on top of the lab profile):**
+
+```
+--language-model-only REMOVED          # mm processor + vision tower loaded
+--skip-mm-profiling                    # vision tower ~60K KV tokens instead
+                                       # of ~300K max-size MM profile (sergio_l #127)
+--limit-mm-per-prompt '{"image": 4, "video": {"count": 1, "num_frames": 32,
+                                 "width": 512, "height": 512}}'
+                                       # MODERN dict format; legacy {"video": 1}
+                                       # is rejected by this vLLM build (0rand #130)
+```
+
+Same image/weights/standing flags otherwise: 512K, block 256, fp8_ds_mla,
+1024/16, MTP-3, gm 0.90, enforce-eager. Containers `glm53-vision-head/worker`,
+selected via `LAB_STACK=lab-vision lab/lab-launch.sh up`.
+
+**Boot results (this stack, GB10 121.69 GiB UMA):**
+
+| pin | warmup forward | result |
+|---|---|---|
+| 10 GiB (`LAB_KV_CACHE_BYTES`) | OOM | `Worker proc VllmWorker-0 died unexpectedly (exit code: None)` ~90 s after "GPU KV cache size: 1,164,369 tokens" — the NOTES-512k rounds 1–2 signature (mm front-end ~15.7 GiB + pinned KV + warmup activations > UMA line). Pool *was* 1,164,369 (skip-mm-profiling confirmed — no ~300K mm reservation), so the crash is host-anon + activations, not KV reservation |
+| **9 GiB (`LAB_VISION_KV_CACHE_BYTES`, standing default)** | clean | booted ~16 min; **KV pool 1,022,844 tokens (1.95× @512K)**; vision smoke PASS ("blue background with a red square in the center" on a synthetic image, 396 prompt tokens incl. image) |
+
+**Delta vs the LMO standing profile:** pool 1,164,369 (2.22×) → 1,022,844
+(1.95×); vision input enabled. The 9 GiB pin is the same activation-headroom
+fix that rescued the k4 LibertAIDAI profile (§6) — the mm front-end eats
+headroom on this UMA line, and `--skip-mm-profiling` does not change host-anon
+usage.
+
+**Quality:** (pending — c1 greedy seed-42 hardmode + 0rand-#124 replica running)
+
+**Rollback:** `lab/lab-launch.sh down` + `LAB_STACK=lab lab/lab-launch.sh up`
+(LMO standing profile, 10 GiB pin).

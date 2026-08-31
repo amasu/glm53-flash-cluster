@@ -16,9 +16,9 @@ if curl -sfS -m 8 "http://$HEAD_HOST:$PORT/v1/models" >/dev/null 2>&1; then
   exit 0
 fi
 
-# endpoint down — is the head container freshly started (<35 min => boot in progress)?
+# endpoint down — is a lab-stack container freshly started (<35 min => boot in progress)?
 age_min=$(ssh -T -o ConnectTimeout=8 -o BatchMode=yes "$HEAD_HOST" \
-  "docker ps --format '{{.RunningFor}}' --filter name=glm53-lab-head 2>/dev/null" | head -1)
+  "docker ps --format '{{.RunningFor}}' --filter name=glm53-lab-head --filter name=glm53-vision-head 2>/dev/null" | head -1)
 # "RunningFor" examples: "1 minute ago", "23 minutes ago", "2 hours ago", "3 days ago"
 to_min() {
   case "$1" in

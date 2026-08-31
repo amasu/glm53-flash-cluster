@@ -167,6 +167,17 @@ Rollback to the LibertAIDAI stack: `lab/lab-launch.sh down` then
 Optionally run `lab/lab-watchdog.sh` from cron to auto-restart the lab
 stack if the endpoint dies (it skips a live boot via container age).
 
+**lab-vision variant (vision enabled, 2026-08-31):** `lab/docker-compose-lab-vision.yaml`
+is the same profile with the multimodal front-end ON, shaped by 0rand's
+proven config (forum #381350 #127/#130): `--skip-mm-profiling` (vision
+tower costs ~60K KV tokens instead of ~300K) + modern-format
+`--limit-mm-per-prompt` (legacy `{"video": 1}` is rejected by this vLLM
+build). Select with `LAB_STACK=lab-vision lab/lab-launch.sh up` (or set
+`LAB_STACK=lab-vision` in `.env` — explicit env vars win over `.env`).
+Containers: `glm53-vision-head/worker`. `down` clears both stacks
+(single-stack policy). Same image, same weights, same standing flags
+(512K, 1024/16, MTP-3, 10 GiB pin, gm 0.90) — only the mm flags differ.
+
 ## Key serve flags (load-bearing — do not "clean up")
 
 Current default profile (`exec-vllm.sh`, 512K + MTP-4 + 9 GiB pin):
