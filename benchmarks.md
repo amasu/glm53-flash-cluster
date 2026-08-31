@@ -4,13 +4,17 @@ Single source of truth for everything investigated on this 2× DGX Spark (GB10)
 cluster: what was tried, the quality scores, the speed numbers, the KV-pool
 sizes, and the crash forensics. Updated as each experiment lands.
 
-- **Model:** `LibertAIDAI/GLM-5.3-Flash-NVFP4` (320B total / 18B active, 181 GiB, `glm5_next` NoPE sparse-MLA + KDA)
+- **Model (quant):** **ACTIVE = `local-inference-lab/GLM-5.3-Flash-NVFP4`** @ rev
+  `378ca545…` (MIXED_PRECISION: NVFP4 experts + MXFP8 MTP drafter, 186 GB).
+  Retired: `LibertAIDAI/GLM-5.3-Flash-NVFP4` (uniform NVFP4, 182 GiB) — kept for rollback.
+  Both: 320B total / 18B active, `glm5_next` NoPE sparse-MLA + KDA.
 - **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `aitopatom-6253` (rank 0, 10.100.90.1), worker `10.100.90.4` (rank 1, headless).
 - **Endpoint:** `http://aitopatom-6253.local:8000/v1` — served name `glm-5.3-flash` (Hermes default provider).
-- **Image:** `glm53:v9` (tonyd2wild sm_121 patch chain v1→v8 + the CC-12.x sparse-MLA indexer guard). `glm53:v8` retained on both nodes for rollback.
-- **Bench harness:** `tool-eval-bench` v2.6.1.dev24, hardmode, **seed 42**, 88 scenarios, c1 sequential, thinking enabled, temperature 0.0. Reports in `runs/`, raw scores in `data/benchmarks.sqlite`.
+- **Image (ACTIVE):** `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad). `glm53:v9` (tonyd2wild chain) retained on both nodes for rollback.
+- **Bench harness:** `tool-eval-bench` (dev24 → dev32 over the log's lifetime; see §Methodology), hardmode, **seed 42**, 88 scenarios. Two protocols were used: **c1/greedy** (standing quality protocol) and the **0rand-param replica** (parallel 4, trials 2, temp 0.1 — see §8).
+- **Watchdog:** `lab/lab-watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the stack if down.
 
-> Note: this is the **GLM-5.3-Flash** provider (k=MTP, 9GiB pin, 512K, 1.44M pool).
+> Note: this is the **GLM-5.3-Flash** provider (lab-quant, 10 GiB pin, 512K, 1.16M pool).
 > It is a different deployment from the DeepSeek-V4-Flash-0731 research tracked in
 > `~/deepseek-v4-flash-optimization/` (DSpark spec, fp8 KV, 2× GB10) — do not mix the numbers.
 
@@ -18,12 +22,13 @@ sizes, and the crash forensics. Updated as each experiment lands.
 
 ## TL;DR — profiles tried, with quality + pool + speed
 
-| # | profile (exec script) | image | ctx | KV dtype | pool | quality (seed-42 hardmode) | decode speed | status |
-|---|---|---|---|---|---|---|---|---|
-| 0 | `exec-vllm-v8-262k.sh` (day-0) | glm53:v8 | 262K | bf16 | **311,419 tok** (1.19×) | **89/100** (156 pts) | ~14–22 tok/s (comm. ~14.3 bf16) | retired baseline |
-| 1 | `exec-vllm-262k-fp8.sh` | glm53:v9 | 262K | fp8 | **610,519 tok** (2.33×) | **90/100** (159 pts) | ~21.8 tok/s (comm. fp8+MTP4) | fallback profile |
-| 2 | `exec-vllm-512k.sh` (10GiB pin, MTP-3) | glm53:v9 | **512K** | fp8, **10 GiB pin** | **1,435,742 tok** (2.74× conc. @512K) | **87/100** (153 pts) | **~24–30 tok/s** live (MTP-3) | superseded |
-| 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (157 pts) | same ~25–30 tok/s band; median turn 5.9 s; MTP-4 acceptance 46.3% | **ACTIVE (standing config)** |
+| # | profile | image | quant | ctx | KV dtype | pool | quality (seed-42 hardmode, c1 greedy) | decode speed | status |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | `exec-vllm-v8-262k.sh` (day-0) | glm53:v8 | LibertAIDAI | 262K | bf16 | **311,419 tok** (1.19×) | **89/100** (156 pts) | ~14–22 tok/s (comm. ~14.3 bf16) | retired baseline |
+| 1 | `exec-vllm-262k-fp8.sh` | glm53:v9 | LibertAIDAI | 262K | fp8 | **610,519 tok** (2.33×) | **90/100** (159 pts) | ~21.8 tok/s (comm. fp8+MTP4) | fallback profile |
+| 2 | `exec-vllm-512k.sh` (10GiB pin, MTP-3) | glm53:v9 | LibertAIDAI | **512K** | fp8, **10 GiB pin** | **1,435,742 tok** (2.74× conc. @512K) | **87/100** (153 pts) | **~24–30 tok/s** live (MTP-3) | superseded |
+| 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | LibertAIDAI | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (157 pts) | ~25–30 tok/s; median turn 5.9 s; MTP-4 acceptance 46.3% | retired (superseded by 4) |
+| **4** | **`lab/docker-compose-lab.yaml` (lab-quant, MTP-3, 1024 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 10 GiB pin**, block 256 | **1,164,369 tok** (2.22× conc. @512K) | **90/100** (156/174) c1 greedy; **90/100** (158/176) 0rand-param replica | 24–30 tok/s band; MTP-3 accept ~2.8–3.0, 61–67% draft acceptance @ c1 | **ACTIVE (standing config)** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
@@ -283,6 +288,59 @@ Default greedy remains the standing config.
 
 ---
 
+## Methodology — how the scores are produced, and how to read them
+
+**Harness.** `tool-eval-bench` (SeraphimSerapis), hardmode suite (88 scenarios,
+Categories A–P, pass=2 / partial=1 / fail=0 pts; final score = points/max × 100).
+Runs are stored in `~/tool-eval-runs/data/benchmarks.sqlite` (`scenario_runs`,
+per-scenario verdicts + notes) with markdown reports under
+`~/tool-eval-runs/runs/2026/08/`. This cluster's older runs are also mirrored in
+`data/benchmarks.sqlite` here.
+
+**Standing quality protocol (used for profiles 0–3, and profile 4's first bench):**
+`--seed 42 --hardmode --backend vllm --base-url http://aitopatom-6253.local:8000/v1`,
+**c1 sequential**, thinking ON, **temperature 0.0 (greedy)**, `max_turns 8`,
+request timeout 120 s, ~35 min per run. All profile comparisons in §3–§7 use this
+protocol, so they are apples-to-apples.
+
+**0rand-parameter protocol (used for the §8 replica):** matches
+0rand's forum 381350 #124 command — `--parallel 4 --trials 2 --timeout 360
+--max-turns 32`, `chat_template_kwargs={"thinking":true,"reasoning_effort":"max"}`,
+`temperature 0.1`, `top_p 1` (top_k left at default/unrestricted on both rigs).
+The harness itself warns that `--parallel >1` can cause server-saturation timeouts
+recorded as FAIL even when the model reasoned correctly — so **parallel-protocol
+scores are comparable to 0rand's parallel scores, but not to c1 scores**.
+
+**What makes "same benchmark" give different scores (documented empirically, 2026-08-30/31):**
+1. **Decoding is not deterministic** even at temp 0: FP reduction order varies with
+   batch composition; speculative decoding (MTP) adds accept/reject stochasticity;
+   cluster state (clocks, page cache, concurrency) perturbs logits.
+2. **Sampling params** — temp 0.1 vs 0.0, top_p, `reasoning_effort`: our A/Bs (§7)
+   show greedy ≈ best for this stack; 0rand's temp 0.1/effort-max flips individual
+   scenarios without changing the headline much.
+3. **Concurrency** — c1 vs `--parallel 4` changes batch composition (see 1) and
+   latency; the 0rand-param run's two trials scored **89 and 90** individually.
+4. **Trials/averaging** — `--trials 2` reports mean ± CI plus Pass@2 (ceiling) /
+   Pass^2 (reliability floor); a single run has no variance estimate.
+5. **Harness version & denominator** — dev24 vs dev25 vs dev32 change scenario
+   point budgets (max 176 → 174 → 176 observed across runs); never compare totals
+   across different denominators.
+6. **Transient infra** — client connection drops / saturation timeouts count as
+   scenario FAILs (observed: TC-50 "All connection attempts failed" in one c1 run;
+   the 0/100 run of 2026-08-30 was an engine-down artifact, not a model result).
+
+**Noise floor.** At seed 42, run-to-run scenario flips of ±2–3 (≈ ±1–2 headline
+points) are normal. Per-scenario diffs and category deltas are the reliable signal;
+a single-point headline delta is not a verdict. For a stable number: N≥3 repeats,
+mean ± variance, exclude transient errors, hold harness version + protocol fixed.
+
+**Server-side reproducibility rule (lab-quant):** serve with
+`--max-num-batched-tokens 1024 --max-num-seqs 16` (0rand's proven config). The
+gist's 4096-batch variant OOM-kills the head worker on batched forwards on GB10 —
+see §8 "Config fix".
+
+---
+
 ## 8. Lab-quant swap (2026-08-30) — `local-inference-lab` mixed-precision, the standing config
 
 Replaced the LibertAIDAI uniform-NVFP4 quant with `local-inference-lab/GLM-5.3-Flash-NVFP4`
@@ -377,12 +435,30 @@ concurrency headroom.
 
 ## Rollback
 
-- **Image:** `glm53:v8` still on both nodes (same ID as pre-upgrade).
-- **Profile switch:** on both nodes, `cp exec-vllm-<profile>.sh exec-vllm.sh`,
-  then `cluster.sh down && cluster.sh up`.
+**Current ACTIVE stack** = lab-quant (`glm53:lab`, `lab/docker-compose-lab.yaml`,
+`lab-launch.sh`), serving :8000 under the name `glm-5.3-flash`. Rollback in
+either direction is a few minutes:
+
+- **lab → old LibertAIDAI k4 profile** (profiles 0–3):
+  ```
+  cd glm53-flash-cluster/lab && bash lab-launch.sh down      # stop the lab stack on :8000
+  # on BOTH nodes:
+  cp exec-vllm-512k-k4.sh exec-vllm.sh                       # the 89/100 standing LibertAIDAI profile
+  cd glm53-flash-cluster && bash cluster.sh up               # worker first, then head
+  ```
+  Old LibertAIDAI weights (182 GB) + `glm53:v9` image are still on both nodes.
+  `cluster.sh` / `exec-vllm-*.sh` are unchanged by the lab work.
+- **old LibertAIDAI → lab** (re-promote):
+  `cluster.sh down` then `cd lab && bash lab-launch.sh up`.
+  Lab weights (`/var/tmp/glm-5.3-flash-lab-nvfp4`) + `glm53:lab` image retained on
+  both nodes, so this re-boots in ~17 min.
+- **Other LibertAIDAI profiles** (if the k4 line is ever reverted): on both nodes,
+  `cp exec-vllm-<profile>.sh exec-vllm.sh`, then `cluster.sh down && cluster.sh up`.
   - `exec-vllm-v8-262k.sh` → day-0 bf16 262K, 89/100 (311K pool).
   - `exec-vllm-262k-fp8.sh` → 262K + FP8, 90/100 (610K pool, multimodal ON).
   - `exec-vllm-512k.sh` → 512K + 10GiB pin + MTP-3, 87/100 (1.44M pool).
+- **Image fallback:** `glm53:v8` (day-0) still on both nodes; `glm53:v9` is the
+  LibertAIDAI 512K image; `glm53:lab` is the current lab image.
 - Boot ~14–17 min cold (weights ~13 min + warmup); worker must start before head
   to complete world init.
 
@@ -390,7 +466,14 @@ concurrency headroom.
 
 - Orchestrator (Mac) → head: `ssh aitopatom-6253.local`; worker is two-hop:
   `ssh 6253 "ssh 10.100.90.4 ..."` (direct ssh to .90.4 times out).
-- `cluster.sh <preflight|up|down|status|logs>`; `up` drops page caches on both
-  nodes first (GB10 unified memory), launches worker rank 1 then head rank 0.
+- `cluster.sh <preflight|up|down|status|logs>` (LibertAIDAI stack); `lab/lab-launch.sh
+  <takeover|up|down|status|logs>` (lab stack). `up` drops page caches on both nodes
+  first (GB10 unified memory), launches worker rank 1 then head rank 0. **Single-stack
+  policy:** only one GLM stack serves :8000 at a time; `lab-launch.sh takeover` stops
+  the other before bringing the lab up.
+- `lab/lab-watchdog.sh` (Mac cron `glm-lab-watchdog`, every 15 min): probes :8000,
+  auto-restarts the lab stack if down (skips if the container is <35 min old, i.e.
+  mid-boot). Log: `/tmp/glm53-lab-watchdog.log`.
 - `.env` lives in 3 places (orchestrator + head + worker REMOTE_DIR); keep in sync.
+  `lab/docker-compose-lab.yaml` is self-contained (no `.env`).
 - `data/` and `runs/` are gitignored (local bench artifacts).
