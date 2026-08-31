@@ -10,6 +10,8 @@
 # the whole surface.
 #
 # Host-agnostic: HEAD_HOST / WORKER_IP / SERVING_PORT from .env or environment.
+# 24/7 watchdog: this root-level script is what the watchdog cron/restart
+# path runs (replaces the deleted lab/lab-watchdog.sh — see NOTES-512k.md).
 set -uo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="/tmp/glm53-watchdog.log"
@@ -29,10 +31,11 @@ age_min=$(ssh -T -o ConnectTimeout=8 -o BatchMode=yes "$HEAD_HOST" \
   "docker ps --format '{{.RunningFor}}' --filter name=glm53-head --filter name=glm53-lab-head --filter name=glm53-vision-head --filter name=vllm_glm53_head 2>/dev/null" | head -1)
 # "RunningFor" examples: "1 minute ago", "23 minutes ago", "2 hours ago", "3 days ago"
 to_min() {
+  local n
   case "$1" in
     *second*) echo 0 ;;
-    *minute*) echo "$1" | grep -oE '^[0-9]+' ;;
-    *hour*)   echo "$1" | grep -oE '^[0-9]+' | awk '{print $1*60}' ;;
+    *minute*) n=$(echo "$1" | grep -oE '[0-9]+' | head -1); echo "${n:-1}" ;;
+    *hour*)   n=$(echo "$1" | grep -oE '[0-9]+' | head -1); echo $(( ${n:-0} * 60 )) ;;
     *)        echo 9999 ;;  # days / unknown => treat as old
   esac
 }

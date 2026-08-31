@@ -19,19 +19,21 @@ watchdog.sh             auto-restart whichever stack is configured in .env
 stacks/*.env            the ONLY thing that differs between stacks
 ```
 
-The standing config is the **lab-quant stack** (`STACK=lab`):
+The standing config is the **lab-vision stack** (lab-quant with the
+multimodal front-end ON, `STACK=lab-vision`):
 `local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision NVFP4 experts +
 MXFP8 MTP drafter) on `glm53:lab` — 512K context, `fp8_ds_mla` KV with a
-10 GiB pinned pool (1,164,369 tokens, 2.22× concurrency @512K), MTP k=3,
-`1024/16` batched-tokens/num-seqs, `--language-model-only`, `--enforce-eager`
-(load-bearing). 24–30 tok/s decode; 90/100 tool-call quality.
+9 GiB pinned pool, MTP k=3, `1024/16` batched-tokens/num-seqs, vision ON
+(`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), `--enforce-eager`
+(load-bearing). 2026-08-31 same-harness A/B: 92.5/100 tool-call quality, no
+text-quality cost vs the text-only `lab` profile (90/100) — benchmarks.md §9.
 
 ## The stacks
 
 | `STACK` | image | weights | profile |
 |---|---|---|---|
-| **`lab`** | `glm53:lab` | lab-quant (`WEIGHTS_DIR_LAB`) | 512K, `fp8_ds_mla` KV 10 GiB pin, MTP k=3, `1024/16`, LMO, eager — **standing config, 90/100** |
-| `lab-vision` | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin |
+| `lab` | `glm53:lab` | lab-quant (`WEIGHTS_DIR_LAB`) | 512K, `fp8_ds_mla` KV 10 GiB pin, MTP k=3, `1024/16`, LMO, eager — text-only standing config, 90/100 |
+| **`lab-vision`** | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin — **default (`STACK=lab-vision`), 92.5/100** |
 | `v9-512k` | `glm53:v9` | LibertAIDAI | 512K, `fp8` KV 9 GiB pin, MTP k=4, LMO — primary rollback path, 89/100 |
 | `v9-262k-fp8` | `glm53:v9` | LibertAIDAI | 262K, `fp8` KV unpinned, MTP k=4, mm ON — historical A/B point |
 | `v8-262k` | `glm53:v9` | LibertAIDAI | 262K, bf16 KV, MTP k=4, mm ON — day-0 bring-up, 89/100 |
@@ -128,7 +130,7 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 git clone https://github.com/amasu/glm53-flash-cluster && cd glm53-flash-cluster
 cp example.env .env
 $EDITOR .env            # HEAD_HOST, HEAD_IP, WORKER_IP, REMOTE_DIR,
-                        # FABRIC_RANGE, IF_NAME, NCCL_IB_HCA, STACK=lab
+                        # FABRIC_RANGE, IF_NAME, NCCL_IB_HCA, STACK=lab-vision
 set -a; source .env; set +a
 
 # 2. Mirror the repo (incl. .env + stacks/) to both nodes
@@ -143,12 +145,12 @@ set -a; source .env; set +a
 #    lab-quant -> WEIGHTS_DIR_LAB (huggingface-cli download
 #    local-inference-lab/GLM-5.3-Flash-NVFP4 --revision 378ca545…)
 
-# 5. Preflight, then launch the configured stack (default: lab)
+# 5. Preflight, then launch the configured stack (default: lab-vision)
 ./cluster.sh preflight
-./cluster.sh lab up             # or: ./cluster.sh lab-vision up, ./cluster.sh v9-512k up, …
+./cluster.sh lab-vision up       # or: ./cluster.sh lab up, ./cluster.sh v9-512k up, …
 
 # 6. Watch warmup (14-21 min), then smoke-test
-./cluster.sh lab logs
+./cluster.sh lab-vision logs
 curl "http://$HEAD_HOST:${SERVING_PORT:-8000}/v1/models"
 ```
 

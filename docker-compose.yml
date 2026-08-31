@@ -23,6 +23,18 @@ services:
     network_mode: host
     ipc: host
     shm_size: 32gb
+    # Endpoint liveness for `docker ps` / `cluster.sh status` (rank 0 only —
+    # the worker rank is headless). $$ defers expansion to the container
+    # runtime, so the check uses the container's own SERVING_PORT env and
+    # follows whatever port the stack serves on.
+    # No restart policy ties to it (restart: "no" + watchdog owns recovery);
+    # this surfaces crash-looping engines as `unhealthy` instead of `Up`.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$$SERVING_PORT/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30m   # engine warmup takes 14-21 min (cold)
     cap_add: [IPC_LOCK]
     ulimits:
       memlock:

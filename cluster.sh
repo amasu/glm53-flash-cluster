@@ -68,14 +68,19 @@ preflight() {
   echo "preflight OK [$STACK]"
 }
 
+# Local junk that must NOT reach the nodes: the .git dir, build-image.sh's
+# multi-GB vendored author repo (it clones to $REPO_DIR *inside* this repo's
+# dir), gitignored artifact dirs, logs. .env IS mirrored on purpose (README).
+RSYNC_EXCLUDES="--exclude .git/ --exclude tonyd2wild-repo/ --exclude data/ --exclude runs/ --exclude __pycache__/ --exclude '*.log'"
+
 mirror() {
   echo "==> Mirroring repo (incl. .env + stacks/) to head $HEAD_HOST:$REMOTE_DIR"
   $HEAD_SSH "mkdir -p '$REMOTE_DIR'"
-  rsync -a ./ "$HEAD_HOST:$REMOTE_DIR/"
+  rsync -a $RSYNC_EXCLUDES ./ "$HEAD_HOST:$REMOTE_DIR/"
   echo "==> Mirroring repo (incl. .env + stacks/) to worker $WORKER_IP:$REMOTE_DIR (via head)"
   run_worker "mkdir -p '$REMOTE_DIR'"
   # Ship head -> worker: source .env on the head for WORKER_IP (not in login env)
-  $HEAD_SSH "cd '$REMOTE_DIR' && set -a; . ./.env; set +a; rsync -a . \"\$WORKER_IP:$REMOTE_DIR/\""
+  $HEAD_SSH "cd '$REMOTE_DIR' && set -a; . ./.env; set +a; rsync -a $RSYNC_EXCLUDES . \"\$WORKER_IP:$REMOTE_DIR/\""
   echo "==> mirrored to both nodes"
 }
 

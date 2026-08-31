@@ -32,7 +32,7 @@ set -euo pipefail
 
 NODE_RANK="${NODE_RANK:?NODE_RANK must be 0 or 1}"
 [[ "$NODE_RANK" == "0" || "$NODE_RANK" == "1" ]] || { echo "FATAL: bad NODE_RANK=$NODE_RANK" >&2; exit 2; }
-MODEL_PATH="${MODEL_PATH:-/models/glm-5.3-flash-nvfp4}"
+MODEL_PATH="${MODEL_PATH:-/models/model}"
 HEAD_ADDR="${HEAD_ADDR:?HEAD_ADDR must be set}"
 MASTER_PORT="${MASTER_PORT:-29521}"
 SERVING_PORT="${SERVING_PORT:-8000}"
@@ -85,10 +85,12 @@ VLLM_PID=$!
 
 if [[ "$NODE_RANK" == "0" ]]; then
   echo "[rank0] waiting up to 40 min for /v1/models on 127.0.0.1:$SERVING_PORT ..."
+  ready=""
   for i in $(seq 1 480); do
     if curl -fsS "http://127.0.0.1:$SERVING_PORT/v1/models" >/dev/null 2>&1; then
       echo "[rank0] ENGINE READY — /v1/models answered:"
       curl -fsS "http://127.0.0.1:$SERVING_PORT/v1/models" | head -c 600; echo
+      ready=1
       break
     fi
     if ! kill -0 "$VLLM_PID" 2>/dev/null; then
@@ -97,6 +99,7 @@ if [[ "$NODE_RANK" == "0" ]]; then
     fi
     sleep 5
   done
+  [[ -n "$ready" ]] || { echo "[rank0] FATAL: engine not ready after 40 min, aborting" >&2; exit 1; }
 fi
 
 # Foreground the vllm process so the container stays alive; propagate its exit.
