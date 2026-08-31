@@ -56,12 +56,6 @@ run_worker() {
   ssh -T "$HEAD_HOST" "ssh -T $WORKER_IP 'echo \"$b64\" | base64 -d | bash'"
 }
 
-# Node-side environment: the node runs compose from $REMOTE_DIR, sourcing the
-# SAME two files as the orchestrator — site .env (a mirror of this one) plus
-# the stack file. Sourcing the stack file AFTER the site .env keeps the
-# orchestrator and node in exact agreement: stack file wins.
-NODE_ENV="set -a; . ./.env; . ./$STACK_FILE; set +a"
-
 preflight() {
   $HEAD_SSH "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"HEAD: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"HEAD: port $SERVING_PORT free\""
   run_worker "ss -ltn | grep -E \":$SERVING_PORT\\b\" && { echo \"WORKER: port $SERVING_PORT BUSY\"; exit 1; } ; echo \"WORKER: port $SERVING_PORT free\""
@@ -85,16 +79,23 @@ mirror() {
   echo "==> mirrored to both nodes"
 }
 
+# Node-side sourcing, used inside an explicitly fail-fast `bash` (see up()).
+# The stack file is sourced AFTER the site .env so the stack pins its own
+# knobs; `set -a` exports them so compose's bare-name passthrough picks them up.
+NODE_SOURCING="set -a; . ./.env; . ./$STACK_FILE; set +a"
+
 up() {
   # Launch order is load-bearing (mp executor rendezvous): worker rank 1
-  # first, then head rank 0.
+  # first, then head rank 0. Each rank's command is self-contained and
+  # fail-fast (set -euo pipefail) so a missing dir/file aborts instead of
+  # launching compose from the wrong place.
   echo "==> Launching WORKER (rank 1) first"
-  run_worker "cd '$REMOTE_DIR' && $NODE_ENV && docker compose up -d glm53-worker"
+  run_worker "set -euo pipefail; cd '$REMOTE_DIR' && $NODE_SOURCING && docker compose up -d glm53-worker"
   sleep 20
   run_worker "docker ps --filter name=glm53-worker --format '{{.Names}} {{.Status}}'"
 
   echo "==> Launching HEAD (rank 0)"
-  $HEAD_SSH "cd '$REMOTE_DIR' && $NODE_ENV && docker compose up -d glm53-head"
+  $HEAD_SSH "set -euo pipefail; cd '$REMOTE_DIR' && $NODE_SOURCING && docker compose up -d glm53-head"
 
   echo "==> Both ranks up [$STACK]. Engine takes 14-21 min (warm caches faster)."
   echo "    Watch:  cluster.sh $STACK logs"
