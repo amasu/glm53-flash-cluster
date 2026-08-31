@@ -5,7 +5,11 @@
 # Recipe: kilork gist a887667f4f423b7cc324859cd5e32ebd (92/100 tool-eval
 # hardmode, seed 42) + 0rand 2x-Spark packaging. Proven flag set:
 #   512K ctx, fp8_ds_mla KV + 10 GiB pin, block 256, MTP k=3,
-#   enforce-eager, language-model-only, gm 0.90, batched 4096.
+#   enforce-eager, language-model-only, gm 0.90.
+# 2026-08-30 delta vs gist: max-num-seqs 16 + max-num-batched-tokens 1024
+#   (0rand's actual 91/100 post-#124 config, forum 381350). The gist's
+#   batched 4096 OOM-kills the head worker on the first parallel-4 forward
+#   on GB10 (repro: worker signal-killed mid-scheduler-dump, 2x on 08-30).
 # Image: glm53:lab = day-0 base (digest-pinned 905c0293…) + 5 patches
 #   (modelopt MTP-namespace fix, naming shim, CC-12.x indexer guards,
 #    NoPE-MLA rope-pad) — build context /var/tmp/glm53-lab-build on the head.
@@ -99,8 +103,8 @@ services:
           --kv-cache-memory-bytes 10737418240 \
           --block-size 256 \
           --max-model-len 524288 \
-          --max-num-seqs 8 \
-          --max-num-batched-tokens 4096 \
+          --max-num-seqs 16 \
+          --max-num-batched-tokens 1024 \
           --enable-chunked-prefill \
           --enable-prefix-caching \
           --disable-custom-all-reduce \
@@ -139,8 +143,8 @@ services:
           --kv-cache-memory-bytes 10737418240 \
           --block-size 256 \
           --max-model-len 524288 \
-          --max-num-seqs 8 \
-          --max-num-batched-tokens 4096 \
+          --max-num-seqs 16 \
+          --max-num-batched-tokens 1024 \
           --enable-chunked-prefill \
           --enable-prefix-caching \
           --disable-custom-all-reduce \

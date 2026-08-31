@@ -335,6 +335,46 @@ cluster.sh up
   on world-init. Also: `lab-launch.sh` is a Mac-orchestrator tool (two-hop ssh); run it from the
   Mac, not the head.
 
+### 0rand exact-parameter replica (2026-08-31) — matches his post #124 within 1 pt
+Re-ran with 0rand's *actual* sampling params (his forum 381350 #124 command):
+`--seed 42 --hardmode --parallel 4 --trials 2 --timeout 360 --max-turns 32`,
+`--backend-kwargs '{"chat_template_kwargs":{"thinking":true,"reasoning_effort":"max"},
+"temperature":0.1,"top_p":1}'` (top_k left at default/unrestricted on both sides).
+Our rig: **90/100 (158/176), 74 pass / 10 partial / 4 fail** vs his forum **91/100
+(161/176), 74/13/1**. Trial stats in our run: mean 89.5, 95% CI [89.0, 90.0],
+Pass@2 86.4%, Pass^2 79.5% — i.e. the two trials scored 89 and 90.
+
+This is the live demonstration of "same benchmark, different scores":
+| run | method | score | pass/partial/fail |
+|---|---|---|---|
+| A | old quant k4, c1, dev24, t0 | 89 | (157/176) |
+| B | lab quant, c1, dev24, t0, trials1 (standing) | 90 | 73/10/5 |
+| C | lab quant, **0rand params p4, dev32, t0.1, trials2** | 90 | 74/10/4 |
+| D | 0rand forum #124 (his rig, p4, dev25, t0.1, trials2) | 91 | 74/13/1 |
+
+All three "90/90/91" runs are **not** the same scenario outcomes: B→C flips 6 scenarios
+(TC-33 fail→pass, TC-50 fail→pass, TC-51 partial→pass, TC-61 partial→fail, TC-67 pass→partial,
+TC-82 pass→partial) purely from temp 0.1 + parallel-4 batching + 2-trial averaging — same quant,
+same rig. And C's two trials themselves scored 89 vs 90. So the "true" quality is ~89–90 ± a
+scenarios' worth of flip, not a fixed integer.
+
+### Config fix that came out of matching 0rand (RESOLVED)
+0rand's **actual** running config differs from the kilork gist on two knobs:
+`MAX_NUM_BATCHED_TOKENS=*** "1024 = quality-first") and `MAX_NUM_SEQS=16` (gist said 4096/8).
+The gist's 4096 **OOM-killed our head worker on the first parallel-4 forward** under
+MTP + enforce-eager + fp8_ds_mla on GB10 unified memory (repro: worker signal-killed mid
+scheduler step, `total_num_scheduled_tokens=2747`, right after TileLang JIT-compiled
+`mhc_pre_big_fuse_with_norm_tilelang`; also an idle death ~2 h in). Switched the lab compose to
+exactly 0rand's 1024/16 → clean boot (KV pool back to 1,164,369) + a 4-concurrent probe survived
+the workload that killed 4096. **Standing rule: never serve the lab quant with
+batched-tokens >1024 on this stack.** Watchdog: `lab-watchdog.sh` (Mac cron every 15 min,
+job `glm-lab-watchdog`) probes :8000 and auto-restarts the stack if down.
+
+Remaining minor deltas vs 0rand's rig (not sampling): we're on harness dev32 (his dev25), his
+`MAX_MODEL_LEN=500000` + multimodal ON + gm 0.89 (KV pool 724,358) vs our 512K +
+language-model-only + gm 0.90 (KV pool 1,164,369). KV pool size doesn't affect c1 quality, only
+concurrency headroom.
+
 ## Rollback
 
 - **Image:** `glm53:v8` still on both nodes (same ID as pre-upgrade).
