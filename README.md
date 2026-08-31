@@ -4,11 +4,17 @@ Two-node DGX Spark cluster (head = rank 0, worker = rank 1) serving
 `LibertAIDAI/GLM-5.3-Flash-NVFP4` (320B total / 18B active, 181 GiB, `glm5_next`)
 as `glm-5.3-flash` over vLLM TP=2 on the QSFP/RoCE fabric.
 
-**Current config (2026-08-28):** 512K context, FP8 KV with 9 GiB pinned pool
-(1,261,444 tokens, 2.41× concurrency at 512K), MTP k=4, `--language-model-only`
-(text-only). ~24–30 tok/s decode c1; 89/100 tool-call quality (seed-42 hardmode).
-See `benchmarks.md` for the full investigation log and `NOTES-512k.md` for the
-512K upgrade + crash forensics.
+**Current config (2026-08-31):** the standing config is the **lab-quant stack**
+(`lab/`): `local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision MVFP4
+experts + MXFP8 MTP drafter) served as `glm-5.3-flash` — 512K context,
+`fp8_ds_mla` KV with 10 GiB pinned pool (1,164,369 tokens, 2.22× concurrency
+@512K), MTP k=3, batched-tokens 1024 / num-seqs 16, `--language-model-only`
+(text-only), `--enforce-eager` (load-bearing). 24–30 tok/s decode; 90/100
+tool-call quality (seed-42 hardmode; 0rand's own 91/100 reproduced within
+1 pt). The former LibertAIDAI v8/v9 profiles (89/100) remain as a two-stack
+rollback path. See `benchmarks.md` for the full investigation log,
+`NOTES-512k.md` for the 512K upgrade + crash forensics, and `lab/build/README.md`
+for the lab image recipe.
 
 **Host-agnostic:** every site-specific value (hostnames, IPs, ports, paths,
 interface names) comes from `.env`. Copy `example.env` → `.env`, fill it in,
@@ -70,6 +76,14 @@ Scripts and compose fail fast with a message naming the missing variable.
 - `fetch-weights.sh` — head: HF download + rsync to worker + checksum verify
 - `cluster.sh` + `.env` — orchestrator-side control (preflight/up/down/status/logs)
 - `example.env` — configuration template (copy to `.env`, fill in)
+- `docker/lab-build.sh` — build `glm53:lab` from the vendored `lab/build/`
+  context (digest-pinned base + 5 patches), on the head, then ship to the worker
+- `lab/docker-compose-lab.yaml` + `lab/lab-launch.sh` + `lab/lab-watchdog.sh`
+  — the **lab-quant stack** (standing config): takeover/up/down/status/logs
+  from the orchestrator; watchdog auto-restarts the provider endpoint
+- `lab/build/` — vendored build context for `glm53:lab`: digest-pinned
+  Dockerfile + 5 patches + provenance (`UPSTREAM.md`) + recipe README (92/100
+  hardmode on the upstream rig)
 - `benchmarks.md` — investigation + benchmark log (quality, speed, pools, forensics)
 - `NOTES-512k.md` — 512K upgrade notes + crash forensics + rollback
 
@@ -115,6 +129,43 @@ head → worker); from the head node, plain compose is enough.
 3. `./fetch-weights.sh` on head → weights at `WEIGHTS_DIR` on both, sha256-verified
 4. `cluster.sh preflight` → `cluster.sh up` → boot 14–21 min → `cluster.sh logs`
 5. Smoke: `curl http://"$HEAD_HOST":"$SERVING_PORT"/v1/models`
+
+## Standing config: the lab-quant stack (`lab/`)
+
+The 90/100 lab quant replaces the LibertAIDAI stack as the standing config.
+Same `.env` (plus the `LAB_*` / `WEIGHTS_DIR_LAB` / `MASTER_PORT_LAB` block in
+`example.env`), same host-agnostic contract.
+
+```bash
+# 0. Clone, configure, mirror to both nodes (same .env as the main stack)
+git clone https://github.com/amasu/glm53-flash-cluster && cd glm53-flash-cluster
+cp example.env .env   # fill in HEAD_HOST, HEAD_IP, WORKER_IP, REMOTE_DIR,
+                      # WEIGHTS_DIR_LAB, fabric vars (FABRIC_RANGE, IF_NAME, NCCL_IB_HCA)
+set -a; source .env; set +a
+
+# 1. Weights (~186 GB, local-inference-lab quant @ rev 378ca545…) on BOTH nodes
+#    at $WEIGHTS_DIR_LAB (huggingface-cli download --revision 378ca54585c46542bad1f3cb3ed0d73ae51cdb62)
+
+# 2. Build glm53:lab from the vendored context and ship it to the worker
+./docker/lab-build.sh       # ~30 s + base pull; greps/verifies patch markers
+
+# 3. Mirror the repo to both nodes at $REMOTE_DIR (compose + .env live there)
+rsync -a ./ "$HEAD_HOST:$REMOTE_DIR/" && rsync -a ./ "$WORKER_IP:$REMOTE_DIR/"
+#    on the head also stage the lab launch dir: ~/glm53-lab = $REMOTE_DIR/lab
+
+# 4. Launch (worker rank 1 first, then head) — single-stack policy:
+lab/lab-launch.sh takeover  # stops the old stack first, then brings lab up
+#    or, if :8000 is already free: lab/lab-launch.sh up
+
+# 5. Boot 14–21 min; check the boot markers in lab/build/README.md
+#    (weight-load GiB, [quantprobe] algo=MXFP8, KV pool 1,164,369 tokens)
+lab/lab-launch.sh status && lab/lab-launch.sh logs
+```
+
+Rollback to the LibertAIDAI stack: `lab/lab-launch.sh down` then
+`cluster.sh up` (the `glm53:v9` image + old weights stay on both nodes).
+Optionally run `lab/lab-watchdog.sh` from cron to auto-restart the lab
+stack if the endpoint dies (it skips a live boot via container age).
 
 ## Key serve flags (load-bearing — do not "clean up")
 
@@ -199,14 +250,23 @@ from these sources:
     2 trials) and the `1024/16` batched-tokens/num-seqs server flags that our
     0rand-replica benchmark (benchmarks.md §8) reproduces within 1 pt.
 - [FujitsuPolycom/glm53-flash-tp2-spark](https://github.com/FujitsuPolycom/glm53-flash-tp2-spark)
-  (Apache-2.0) — the `sparse_attn_indexer*.patch` pair that
-  `docker/patch_v9_512k.py` mirrors for the CC-12.x sparse-MLA indexer guard;
-  without it GB10 hard-aborts at 512K shapes (`persistent_topk` CTA
-  oversubscription) — see `NOTES-512k.md`.
-- **kilork** — the `local-inference-lab` mixed-precision recipe (gist
-  `a887667f`, 92/100 hardmode claim) that the lab-quant swap follows; served
-  boot markers (KV pool 1,164,369 tokens) match it exactly. Linked from the
-  [local-inference-lab model card](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-NVFP4).
+  (Apache-2.0) — two distinct contributions, both vendored in this repo's
+  `lab/build/`:
+  - the `sparse_attn_indexer*.patch` pair mirrored by
+    `docker/patch_v9_512k.py` (CC-12.x sparse-MLA indexer guard; without it
+    GB10 hard-aborts at 512K shapes — see `NOTES-512k.md`);
+  - the `model.patch` + `modelopt.patch` lab-checkpoint patches (naming shim,
+    MTP MIXED_PRECISION quantization fix) applied unmodified by
+    `lab/build/Dockerfile`.
+- **kilork** — the `local-inference-lab` mixed-precision recipe
+  ([gist `a887667f4f423b7cc324859cd5e32ebd`](https://gist.github.com/kilork/a887667f4f423b7cc324859cd5e32ebd),
+  92/100 hardmode, incl. the `--enforce-eager` quality finding) that the
+  lab-quant swap follows; served boot markers (KV pool 1,164,369 tokens)
+  match it exactly. See `lab/build/README.md`.
+- [kingjones30/GLM-5.3-Flash-2x-DGX-Spark](https://github.com/kingjones30/GLM-5.3-Flash-2x-DGX-Spark)
+  — the NoPE-MLA rope-pad + sm120 topk mod (`patch_mla.py`, vendored in
+  `lab/build/`; load-bearing for `fp8_ds_mla` KV on sm_121, engaged via
+  `VLLM_MLA_NOPE_PAD_ROPE=1`).
 
 **Benchmark harness**
 

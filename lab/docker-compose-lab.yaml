@@ -1,6 +1,10 @@
 # GLM-5.3-Flash NVFP4 — LOCAL-INFERENCE-LAB mixed-precision quant, standing
 # replacement for the LibertAIDAI stack. Serves on :8000 (provider endpoint),
-# master port 29500.
+# master port from MASTER_PORT_LAB (default 29500 matches the kilork/0rand recipe).
+#
+# Host-agnostic: every site-specific value comes from the environment (the
+# same .env file cluster.sh uses — see example.env at the repo root). Fail-fast
+# is enforced by :? expansions; nothing site-specific is hardcoded here.
 #
 # Recipe: kilork gist a887667f4f423b7cc324859cd5e32ebd (92/100 tool-eval
 # hardmode, seed 42) + 0rand 2x-Spark packaging. Proven flag set:
@@ -12,15 +16,17 @@
 #   on GB10 (repro: worker signal-killed mid-scheduler-dump, 2x on 08-30).
 # Image: glm53:lab = day-0 base (digest-pinned 905c0293…) + 5 patches
 #   (modelopt MTP-namespace fix, naming shim, CC-12.x indexer guards,
-#    NoPE-MLA rope-pad) — build context /var/tmp/glm53-lab-build on the head.
+#    NoPE-MLA rope-pad) — build with `docker/lab-build.sh` or see
+#   lab/build/ (Dockerfile + patches vendored in-repo, attribution in
+#   lab/build/UPSTREAM.md).
 #
-# Weights: /var/tmp/glm-5.3-flash-lab-nvfp4 on BOTH nodes
+# Weights: $WEIGHTS_DIR_LAB on BOTH nodes
 #   (local-inference-lab/GLM-5.3-Flash-NVFP4 @ 378ca545…, 186 GB, 59 files).
 # Launch: worker (profile lab, service glm53-lab-worker) first, ~20 s gap,
 #   then head (service glm53-lab-head). Tear down both with `down`.
 
 x-lab-base: &lab-base
-  image: glm53:lab
+  image: ${LAB_IMAGE:-glm53:lab}
   init: true
   restart: "no"
   network_mode: host
@@ -42,7 +48,7 @@ x-lab-base: &lab-base
     - /dev/infiniband:/dev/infiniband
   entrypoint: ["/bin/bash"]
   volumes:
-    - /var/tmp/glm-5.3-flash-lab-nvfp4:/models/glm-5.3-flash-lab-nvfp4:ro
+    - ${WEIGHTS_DIR_LAB:?WEIGHTS_DIR_LAB must be set in .env}:/models/glm-5.3-flash-lab-nvfp4:ro
 
 x-lab-env: &lab-env
   # arch / runtime
@@ -58,18 +64,18 @@ x-lab-env: &lab-env
   # offline weights
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
-  # fabric (our cluster; matches the standing :8000 stack)
+  # fabric (host-agnostic; matches the standing :8000 stack)
   NCCL_NET: IB
   NCCL_IB_DISABLE: "0"
-  NCCL_IB_HCA: "rocep1s0f1,roceP2p1s0f1"
-  NCCL_IB_GID_INDEX: "3"
+  NCCL_IB_HCA: ${NCCL_IB_HCA:?NCCL_IB_HCA must be set in .env}
+  NCCL_IB_GID_INDEX: ${NCCL_IB_GID_INDEX:-3}
   NCCL_IB_ROCE_VERSION_NUM: "2"
   NCCL_IB_ADDR_FAMILY: AF_INET
-  NCCL_IB_ADDR_RANGE: "10.100.90.0/24"
-  NCCL_SOCKET_IFNAME: "enp1s0f1np1"
-  GLOO_SOCKET_IFNAME: "enp1s0f1np1"
-  TP_SOCKET_IFNAME: "enp1s0f1np1"
-  MN_IF_NAME: "enp1s0f1np1"
+  NCCL_IB_ADDR_RANGE: ${FABRIC_RANGE:?FABRIC_RANGE must be set in .env}
+  NCCL_SOCKET_IFNAME: ${IF_NAME:?IF_NAME must be set in .env}
+  GLOO_SOCKET_IFNAME: ${IF_NAME:?IF_NAME must be set in .env}
+  TP_SOCKET_IFNAME: ${IF_NAME:?IF_NAME must be set in .env}
+  MN_IF_NAME: ${IF_NAME:?IF_NAME must be set in .env}
   NCCL_NVLS_ENABLE: "0"
   NCCL_CROSS_NIC: "0"
   NCCL_IB_MERGE_NICS: "0"
@@ -79,7 +85,7 @@ x-lab-env: &lab-env
   TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
 
 services:
-  # Rank 0 (head node): serves the API on :30000
+  # Rank 0 (head node): serves the API on :8000
   glm53-lab-head:
     <<: *lab-base
     container_name: glm53-lab-head
@@ -87,7 +93,7 @@ services:
     environment:
       <<: *lab-env
       NODE_RANK: "0"
-      VLLM_HOST_IP: "10.100.90.1"
+      VLLM_HOST_IP: ${HEAD_IP:?HEAD_IP must be set in .env}
     command:
       - -lc
       - |
@@ -100,24 +106,24 @@ services:
           --tensor-parallel-size 2 \
           --gpu-memory-utilization 0.90 \
           --kv-cache-dtype fp8_ds_mla \
-          --kv-cache-memory-bytes 10737418240 \
+          --kv-cache-memory-bytes ${LAB_KV_CACHE_BYTES:-10737418240} \
           --block-size 256 \
           --max-model-len 524288 \
-          --max-num-seqs 16 \
-          --max-num-batched-tokens 1024 \
+          --max-num-seqs ${LAB_MAX_NUM_SEQS:-16} \
+          --max-num-batched-tokens ${LAB_MAX_NUM_BATCHED_TOKENS:-1024} \
           --enable-chunked-prefill \
           --enable-prefix-caching \
           --disable-custom-all-reduce \
           --kernel-config '{"enable_cutedsl_warmup":false,"enable_flashinfer_autotune":false}' \
-          --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+          --speculative-config '{"method":"mtp","num_speculative_tokens":${LAB_MTP_K:-3}}' \
           --language-model-only \
           --enforce-eager \
           --tool-call-parser glm47 --enable-auto-tool-choice \
           --reasoning-parser glm45 \
           --distributed-executor-backend mp \
           --nnodes 2 --node-rank 0 \
-          --master-addr 10.100.90.1 --master-port 29500 \
-          --host 0.0.0.0 --port 8000
+          --master-addr ${HEAD_IP:?HEAD_IP must be set in .env} --master-port ${MASTER_PORT_LAB:-29500} \
+          --host 0.0.0.0 --port ${SERVING_PORT:-8000}
 
   # Rank 1 (worker node, headless)
   glm53-lab-worker:
@@ -127,7 +133,7 @@ services:
     environment:
       <<: *lab-env
       NODE_RANK: "1"
-      VLLM_HOST_IP: "10.100.90.4"
+      VLLM_HOST_IP: ${WORKER_IP:?WORKER_IP must be set in .env}
     command:
       - -lc
       - |
@@ -140,21 +146,21 @@ services:
           --tensor-parallel-size 2 \
           --gpu-memory-utilization 0.90 \
           --kv-cache-dtype fp8_ds_mla \
-          --kv-cache-memory-bytes 10737418240 \
+          --kv-cache-memory-bytes ${LAB_KV_CACHE_BYTES:-10737418240} \
           --block-size 256 \
           --max-model-len 524288 \
-          --max-num-seqs 16 \
-          --max-num-batched-tokens 1024 \
+          --max-num-seqs ${LAB_MAX_NUM_SEQS:-16} \
+          --max-num-batched-tokens ${LAB_MAX_NUM_BATCHED_TOKENS:-1024} \
           --enable-chunked-prefill \
           --enable-prefix-caching \
           --disable-custom-all-reduce \
           --kernel-config '{"enable_cutedsl_warmup":false,"enable_flashinfer_autotune":false}' \
-          --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+          --speculative-config '{"method":"mtp","num_speculative_tokens":${LAB_MTP_K:-3}}' \
           --language-model-only \
           --enforce-eager \
           --tool-call-parser glm47 --enable-auto-tool-choice \
           --reasoning-parser glm45 \
           --distributed-executor-backend mp \
           --nnodes 2 --node-rank 1 \
-          --master-addr 10.100.90.1 --master-port 29500 \
+          --master-addr ${HEAD_IP:?HEAD_IP must be set in .env} --master-port ${MASTER_PORT_LAB:-29500} \
           --headless
