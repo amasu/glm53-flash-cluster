@@ -144,3 +144,38 @@ headroom (`exec-vllm-512k-k4.sh`):
   (bf16 KV, 262K, 89/100 baseline).
 * Switching profile: on both nodes, `cp exec-vllm-<profile>.sh exec-vllm.sh`,
   then `cluster.sh down && cluster.sh up`.
+
+## Incident 2026-08-31 — head endpoint down: earlyoom killed the rank-0 worker
+**Symptom:** `:8000` down on `aitopatom-6253`; `glm53-head` Exited (0) while
+`glm53-worker` stayed Up (orphaned rank 1).
+**Root cause:** the head node's `earlyoom` (sparkrun-installed,
+`/etc/default/earlyoom`: `-m 2 -s 80 --prefer '(vllm|VLLM|...|python)'
+--avoid '(systemd|sshd|dockerd|containerd|dbus-daemon|NetworkManager)'`)
+SIGTERM-killed the rank-0 `VllmWorker` at 18:01:34 UTC (20:01 CEST) when
+available host RAM dipped under the 2% threshold. On GB10 unified memory the
+model pinned at 90% is the *normal* memory consumer (available ~2.8–3.5% ≈
+3.5 GB steady, dipping <2% under load) — so earlyoom was repeatedly choosing
+the inference process as its victim: **4 kills that day** (01:13, 11:53,
+12:17 CEST against earlier engine generations; 20:01 CEST against the running
+lab-vision engine, started 18:52 CEST — the 20:47 CEST takeover is the recovery
+after this incident). Sequence: earlyoom SIGTERM →
+`Worker proc VllmWorker-0 died unexpectedly (exit code: None)` (18:01:44 UTC)
+→ `EngineDeadError` on the API side → container exited 18:01:50 UTC. No kernel
+OOM-kill, no coredump; host had 117 GB free after the crash. The 7 NVRM
+`NV_ERR_NO_MEMORY` lines at 17:06 UTC were boot allocation probes (expected —
+see Known trade-offs), not the cause.
+**Fixes applied:**
+1. `cluster.sh lab-vision takeover` → endpoint back in ~8 min (warm caches).
+2. The watchdog cron job (hermes `glm-lab-watchdog`, */15) had a stale script
+   path `lab/lab-watchdog.sh` (dir deleted in the cluster restructure; the
+   script is now root `watchdog.sh`) → 3 consecutive failures, i.e. it never
+   auto-restarted. Repointed to `watchdog.sh`.
+3. **Permanent fix:** earlyoom `--avoid` now covers the inference tree on the
+   head node (applied 21:12 CEST; needs sudo there — `amasu` has no
+   passwordless sudo on the head):
+   `sudo sed -i 's/NetworkManager)/NetworkManager|vllm|VLLM|EngineCore|APIServer|Worker_TP)/' /etc/default/earlyoom && sudo systemctl restart earlyoom`
+   Rationale: on a dedicated inference node the model is the intended memory
+   consumer — earlyoom targeting it is a false positive.
+**Verification:** `/v1/models` lists `glm-5.3-flash` (max_model_len 524288);
+live chat completion OK; `glm53-head` Up; earlyoom running with the new
+`--avoid` list (verified via `ps aux | grep earlyoom`).
