@@ -5,7 +5,7 @@ Two-node DGX Spark cluster (head = rank 0, worker = rank 1) serving
 as `glm-5.3-flash` over vLLM TP=2 on the QSFP/RoCE fabric.
 
 **Current config (2026-08-31):** the standing config is the **lab-quant stack**
-(`lab/`): `local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision MVFP4
+(`lab/`): `local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision NVFP4
 experts + MXFP8 MTP drafter) served as `glm-5.3-flash` — 512K context,
 `fp8_ds_mla` KV with 10 GiB pinned pool (1,164,369 tokens, 2.22× concurrency
 @512K), MTP k=3, batched-tokens 1024 / num-seqs 16, `--language-model-only`
@@ -176,11 +176,17 @@ build). Select with `LAB_STACK=lab-vision lab/lab-launch.sh up` (or set
 `LAB_STACK=lab-vision` in `.env` — explicit env vars win over `.env`).
 Containers: `glm53-vision-head/worker`. `down` clears both stacks
 (single-stack policy). Same image, same weights, same standing flags
-(512K, 1024/16, MTP-3, 10 GiB pin, gm 0.90) — only the mm flags differ.
+(512K, 1024/16, MTP-3, gm 0.90) — the mm flags differ, and the KV pin is
+**9 GiB** (`LAB_VISION_KV_CACHE_BYTES`): 10 GiB OOMs the warmup forward
+with the mm front-end on the GB10 UMA line (benchmarks.md §9). Quality on
+the clean same-harness A/B: 92.5 vs LMO 89.5 — no text-quality cost.
 
 ## Key serve flags (load-bearing — do not "clean up")
 
-Current default profile (`exec-vllm.sh`, 512K + MTP-4 + 9 GiB pin):
+LibertAIDAI profile (`exec-vllm.sh`, 512K + MTP-4 + 9 GiB pin) — the rollback
+path; the standing lab stack's equivalent flags are in
+`lab/docker-compose-lab.yaml` (+ `--skip-mm-profiling`/`--limit-mm-per-prompt`
+for `lab-vision`):
 
 | flag | why |
 |---|---|

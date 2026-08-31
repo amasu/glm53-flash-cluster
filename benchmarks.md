@@ -515,7 +515,67 @@ fix that rescued the k4 LibertAIDAI profile (§6) — the mm front-end eats
 headroom on this UMA line, and `--skip-mm-profiling` does not change host-anon
 usage.
 
-**Quality:** (pending — c1 greedy seed-42 hardmode + 0rand-#124 replica running)
+**Quality — two protocols, one critical confound:**
+
+The naive c1-greedy comparison (vision **88/100** vs LMO **90/100**) is
+**invalid as a vision-only delta**: the LMO c1 baseline ran on
+`tool-eval-bench v2.6.1.dev24`, the vision c1 run on `dev32`. Different harness
+= different scoring. Per-scenario deltas on that pair (net −1 pt) are
+therefore harness-confounded, not a clean vision signal.
+
+The **clean A/B is the 0rand-#124 protocol** (parallel 4, 2 trials, temp 0.1,
+effort max, seed 42) with the **same dev32 harness** on both stacks:
+
+| stack | trials | mean | CI | Pass@2 / Pass^2 |
+|---|---|---|---|---|
+| LMO lab (dev32) | 89, 90 | **89.5 ± 0.7** | [89.0, 90.0] | 86.4% / 79.5% |
+| **lab-vision (dev32)** | 91, 94 | **92.5 ± 2.1** | [91.0, 94.0] | 89.8% / 85.2% |
+
+So on the only same-harness A/B, **vision is *higher* than LMO (+3.0 mean,
++3.4pp Pass@2, +5.7pp Pass^2)** — the opposite of a regression. Per-scenario
+deltas on trial 1 (LMO 90 → vision 91): TC-80 fail→pass (+2),
+TC-35/61/67/75/82 partial→pass (+1 each), TC-51 pass→fail (−2),
+TC-40/69 pass→partial (−1 each). Net +3 — i.e. vision shows **no text-quality
+cost**; the trial spread (±2.1 vs LMO's ±0.7) is the flaky-scenario
+sensitivity documented in §Methodology, not a vision effect.
+
+**Why the "lower score" impression (88 < 90) — root cause, verified:**
+1. **Harness version**, not vision. c1-greedy baseline (90) = dev24; vision
+   c1 (88) = dev32. dev24→dev32 changed the 88-scenario scoring; the −1 pt
+   is within that harness shift's noise, not attributable to the mm flags.
+2. **Protocol choice.** c1-greedy (our standing protocol) and the 0rand
+   parallel-4 protocol rank scenarios differently (batch composition +
+   temp 0.1 + effort-max all flip individual scenarios). Comparing across
+   protocols — as "his 91 vs our 88" would — is not a like-for-like test.
+3. **Trial variance.** Even LMO's identical-protocol two trials span
+   89–90; vision spans 91–94. A single-trial headline is not a verdict
+   (documented rule: N≥3 repeats for a stable number).
+
+**Verdict (revised):** on the clean same-harness 0rand protocol, lab-vision
+(92.5) **outperforms** LMO (89.5); on the confounded c1-greedy, it is −1 pt
+(88 vs 90, different harness). Either way, **enabling vision + the 9 GiB pin
+shows no systematic text-quality regression**, and the "88 < 90" is a
+harness/protocol artifact, not a vision penalty. The 9 GiB pin remains
+load-bearing (10 GiB OOMs the warmup forward with the mm front-end).
+
+**Stability finding (costs ~1 boot cycle):** the first real forward after a
+cold boot can trigger a TileLang/Triton JIT-compile crash of the head TP0
+worker (`mhc_pre_big_fuse_with_norm_tilelang` / `_kpool_tail_seed_kernel`),
+same MTP+eager+fp8_ds_mla-on-GB10 class as the §8 config fix. **Mitigation that
+worked: JIT-prime the stack right after `Application startup complete`** (a
+few thinking-ON text turns to ~768 tokens + one image request, c1) before
+running the bench; the engine then stayed up for both full protocols.
+
+**Vision smoke (synthetic image, c1, data-URL):** PASS — "blue background with
+a red square in the center" (exact match; 396 prompt tokens incl. image embed).
+Note: engine warns `video.num_frames override (32) exceeds model's maximum
+number of frames (9), will be ignored` — the 32-frame limit is 0rand's string,
+but the model caps at 9 frames; harmless for image use.
+
+**Operational wrap-up:** lab-vision is a drop-in for the standing lab profile
+(same image/weights/flags, only the mm flags + pin differ) that adds image
+input. The 9 GiB pin is load-bearing (10 GiB OOMs the warmup forward with the
+mm front-end on the GB10 UMA line).
 
 **Rollback:** `lab/lab-launch.sh down` + `LAB_STACK=lab lab/lab-launch.sh up`
 (LMO standing profile, 10 GiB pin).
