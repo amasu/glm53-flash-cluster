@@ -582,3 +582,56 @@ mm front-end on the GB10 UMA line).
 
 **Rollback:** `lab/lab-launch.sh down` + `LAB_STACK=lab lab/lab-launch.sh up`
 (LMO standing profile, 10 GiB pin).
+
+## 10. `MAX_NUM_BATCHED_TOKENS` 1024 → 2048 A/B (2026-09-03) — ADOPT?
+
+**Hypothesis (forum sweep):** tonyliu312's ladder on GLM-5.3-Flash TP4 claimed
+**−29% TTFT / +42% prefill** raising `--max-num-batched-tokens` 1024→2048→4096
+at ~+1 GiB. Our lab-vision stack pins 1024 (0rand's "quality-first" default; the
+gist's 4096 variant OOM-killed the head worker on batched forwards on GB10 — so
+2048 is the first untested step).
+
+**Protocol (paired, same-day, same harness dev39, serial single-stack):**
+- 1024 side: bench-endpoint matrix + tool-eval seed42 0rand-p4 (88-scenario
+  protocol, thinking max @ t0.1/p1, 2 trials p4) + 24k-prompt TTFT probe ×3 (warm).
+- 2048 side: identical, after `cluster.sh lab-vision takeover` (argv diff
+  verified: ONLY `--max-num-batched-tokens` changed 1024→2048; KV pin, ctx,
+  MTP k=3, gm 0.90 all identical).
+- Both boots clean: **KV pool 1,022,844 tokens (1.95× @512K) on both** — the
+  fixed 9 GiB pin absorbs the +1 GiB activation scratch; 2048 does NOT OOM
+  (the cliff is 4096, as previously documented).
+
+**Results (steady-state):**
+
+| Metric | 1024 | 2048 | Δ |
+|---|---|---|---|
+| 24k-prefill TTFT (warm, 3 runs) | 17.5/17.8/17.7 s → **17.7 s** | 14.2/13.7/13.8 s → **13.9 s** | **−21%** |
+| prose 1024-out decode | 24.6 tok/s | 25.5 | +3.7% (noise band) |
+| code 1024-out decode | 27.4 | 28.6 | +4.4% (noise band) |
+| c4 aggregate | 25.3 | 25.7 | +1.6% |
+| c16 aggregate | 23.8 | 22.5 | −5.5% (noisiest probe) |
+| tool-eval seed42 (dev39, 0rand-p4) | **89.5 ± 0.7** (122.0 ± 1.4 pts) | **90.5 ± 0.7** (121.0 ± 1.4 pts) | within CI |
+
+Quality flip analysis (per-scenario T1/T2, 69×2 pairs): **UP 6 / DOWN 8**, net
+−2 pts, scattered across unrelated scenarios (TC-35/50/53/61/67/68) with no
+category concentration (categories with variance: C 82%±9, G 84%±23, L 94%±9,
+O 84%±12 — all single-scenario wobbles; TC-67/68 are the known tool-restraint
+wobbles). By the flip-asymmetry discriminator this is **noise, not a real
+regression** (a real effect moves ≥4:1 skewed or concentrates in one category).
+
+**Verdict:** 2048 is a **clean, quality-neutral long-prefill win** (−21% TTFT
+at 24k, matches the forum's direction; magnitude a touch below the TP4 claim,
+which is expected since our stack is TP2 with a fixed KV pin). Decode within
+noise on all probes. No OOM at 9 GiB pin. **Recommended: adopt 2048** as the
+lab-vision standing default (and `lab.env`), pending Oussama's sign-off — it is
+the cheapest positive from the 2026-09-03 sweep.
+
+**Evidence (this repo, `runs/`):** `bench-matrix-{1024,2048}-20260903.log`
+(+ `bench-matrix-2048-warm-20260903.log`), `ttft-{1024,2048}-20260903.log`,
+`ttft-probe.py` (24k-prompt streaming TTFT probe, cache-defeating per-run
+hex markers), and the four tool-eval reports
+(`*batched{1024,2048}-seed42*.md` + summaries, 2026-09-03).
+
+**Revert:** `stacks/lab-vision.env` → `MAX_NUM_BATCHED_TOKENS=1024` + mirror + takeover
+takeover (this is the current live value at commit time — the 2048 value is
+the candidate).
