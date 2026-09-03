@@ -28,7 +28,8 @@ sizes, and the crash forensics. Updated as each experiment lands.
 | 1 | `exec-vllm-262k-fp8.sh` | glm53:v9 | LibertAIDAI | 262K | fp8 | **610,519 tok** (2.33×) | **90/100** (159 pts) | ~21.8 tok/s (comm. fp8+MTP4) | fallback profile |
 | 2 | `exec-vllm-512k.sh` (10GiB pin, MTP-3) | glm53:v9 | LibertAIDAI | **512K** | fp8, **10 GiB pin** | **1,435,742 tok** (2.74× conc. @512K) | **87/100** (153 pts) | **~24–30 tok/s** live (MTP-3) | superseded |
 | 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | LibertAIDAI | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (157 pts) | ~25–30 tok/s; median turn 5.9 s; MTP-4 acceptance 46.3% | retired (superseded by 4) |
-| **4** | **`lab/docker-compose-lab.yaml` (lab-quant, MTP-3, 1024 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 10 GiB pin**, block 256 | **1,164,369 tok** (2.22× conc. @512K) | **90/100** (156/174) c1 greedy; **90/100** (158/176) 0rand-param replica | 24–30 tok/s band; MTP-3 accept ~2.8–3.0, 61–67% draft acceptance @ c1 | **ACTIVE (standing config)** |
+| **4** | **`lab/docker-compose-lab.yaml` (lab-quant, MTP-3, 1024 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 10 GiB pin**, block 256 | **1,164,369 tok** (2.22× conc. @512K) | **90/100** (156/174) c1 greedy; **90/100** (158/176) 0rand-param replica | 24–30 tok/s band; MTP-3 accept ~2.8–3.0, 61–67% draft acceptance @ c1 | retired (superseded by 5) |
+| **5** | **`stacks/lab-vision.env` (lab-quant, vision ON, MTP-3, 2048 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 9 GiB pin**, block 256 | **1,022,844 tok** (1.95× conc. @512K) | **92.5/100** 0rand-p4 same-harness A/B (§9); batched-tokens A/B 2048: **90.5±0.7** vs 1024 89.5±0.7 (§10) | ~25.5 prose / 28.6 code tok/s; **24k-prefill TTFT 13.9 s (−21% vs 1024)** | **ACTIVE (standing config, lab-vision default)** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
@@ -583,7 +584,7 @@ mm front-end on the GB10 UMA line).
 **Rollback:** `lab/lab-launch.sh down` + `LAB_STACK=lab lab/lab-launch.sh up`
 (LMO standing profile, 10 GiB pin).
 
-## 10. `MAX_NUM_BATCHED_TOKENS` 1024 → 2048 A/B (2026-09-03) — ADOPT?
+## 10. `MAX_NUM_BATCHED_TOKENS` 1024 → 2048 A/B (2026-09-03) — ADOPTED
 
 **Hypothesis (forum sweep):** tonyliu312's ladder on GLM-5.3-Flash TP4 claimed
 **−29% TTFT / +42% prefill** raising `--max-num-batched-tokens` 1024→2048→4096
@@ -622,9 +623,15 @@ regression** (a real effect moves ≥4:1 skewed or concentrates in one category)
 **Verdict:** 2048 is a **clean, quality-neutral long-prefill win** (−21% TTFT
 at 24k, matches the forum's direction; magnitude a touch below the TP4 claim,
 which is expected since our stack is TP2 with a fixed KV pin). Decode within
-noise on all probes. No OOM at 9 GiB pin. **Recommended: adopt 2048** as the
-lab-vision standing default (and `lab.env`), pending Oussama's sign-off — it is
-the cheapest positive from the 2026-09-03 sweep.
+noise on all probes. No OOM at 9 GiB pin.
+
+**ADOPTED 2026-09-03 (Oussama sign-off after the paired run):**
+`stacks/lab-vision.env` → `MAX_NUM_BATCHED_TOKENS=2048`, committed as
+`63f4e02`, live on 6253/cfb3 since that boot (verified via container env +
+argv + smoke request). `stacks/lab.env` stays at **1024** — the A/B only
+validated the lab-vision profile (different mm front-end + 9 GiB pin vs lab's
+10 GiB LMO shape); extending 2048 to `lab` is a follow-up A/B if that stack
+is ever re-activated.
 
 **Evidence (this repo, `runs/`):** `bench-matrix-{1024,2048}-20260903.log`
 (+ `bench-matrix-2048-warm-20260903.log`), `ttft-{1024,2048}-20260903.log`,
@@ -632,6 +639,6 @@ the cheapest positive from the 2026-09-03 sweep.
 hex markers), and the four tool-eval reports
 (`*batched{1024,2048}-seed42*.md` + summaries, 2026-09-03).
 
-**Revert:** `stacks/lab-vision.env` → `MAX_NUM_BATCHED_TOKENS=1024` + mirror + takeover
-takeover (this is the current live value at commit time — the 2048 value is
-the candidate).
+**Revert (if ever needed):** `stacks/lab-vision.env` →
+`MAX_NUM_BATCHED_TOKENS=1024`, `cluster.sh mirror`, `cluster.sh lab-vision
+takeover`. 1024 remains fully validated on this stack (Phase A of this A/B).

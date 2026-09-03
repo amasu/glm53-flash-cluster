@@ -23,17 +23,20 @@ The standing config is the **lab-vision stack** (lab-quant with the
 multimodal front-end ON, `STACK=lab-vision`):
 `local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision NVFP4 experts +
 MXFP8 MTP drafter) on `glm53:lab` — 512K context, `fp8_ds_mla` KV with a
-9 GiB pinned pool, MTP k=3, `1024/16` batched-tokens/num-seqs, vision ON
+9 GiB pinned pool, MTP k=3, `2048/16` batched-tokens/num-seqs, vision ON
 (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), `--enforce-eager`
 (load-bearing). 2026-08-31 same-harness A/B: 92.5/100 tool-call quality, no
 text-quality cost vs the text-only `lab` profile (90/100) — benchmarks.md §9.
+2026-09-03: `MAX_NUM_BATCHED_TOKENS` raised 1024 → **2048** after a paired
+A/B (−21% long-prefill TTFT, decode and quality within noise, no OOM) —
+benchmarks.md §10.
 
 ## The stacks
 
 | `STACK` | image | weights | profile |
 |---|---|---|---|
 | `lab` | `glm53:lab` | lab-quant (`WEIGHTS_DIR_LAB`) | 512K, `fp8_ds_mla` KV 10 GiB pin, MTP k=3, `1024/16`, LMO, eager — text-only standing config, 90/100 |
-| **`lab-vision`** | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin — **default (`STACK=lab-vision`), 92.5/100** |
+| **`lab-vision`** | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin, `2048/16` batched/seqs (2026-09-03 A/B, benchmarks.md §10) — **default (`STACK=lab-vision`), 92.5/100** |
 | `v9-512k` | `glm53:v9` | LibertAIDAI | 512K, `fp8` KV 9 GiB pin, MTP k=4, LMO — primary rollback path, 89/100 |
 | `v9-262k-fp8` | `glm53:v9` | LibertAIDAI | 262K, `fp8` KV unpinned, MTP k=4, mm ON — historical A/B point |
 | `v8-262k` | `glm53:v9` | LibertAIDAI | 262K, bf16 KV, MTP k=4, mm ON — day-0 bring-up, 89/100 |
@@ -164,6 +167,60 @@ Switching stacks (single-stack policy — stops the old one first):
 Optionally run `watchdog.sh` from cron (`*/5 * * * *`) to auto-restart the
 configured stack if the endpoint dies (it skips a live boot via container age).
 
+## Changelog
+
+Newest first. Full history: `git log --oneline` (the repo is the source of
+truth; this list tracks meaningful milestones).
+
+### 2026-09-03
+- **`MAX_NUM_BATCHED_TOKENS` 1024 → 2048 on `lab-vision` (adopted, `63f4e02`)**
+  — paired same-day A/B (serial, single-stack, harness dev39 both sides):
+  **−21% 24k-prefill TTFT** (17.7 s → 13.9 s warm), decode within noise on all
+  probes, tool-eval seed-42 0rand-p4 89.5±0.7 → 90.5±0.7 (flip analysis =
+  noise, no category concentration), KV pool unchanged at 1,022,844 tokens
+  (the fixed 9 GiB pin absorbs the extra activation scratch; 2048 does not
+  OOM — 4096 remains the cliff). Full evidence: `benchmarks.md` §10 + `runs/`
+  (bench-matrix logs, `ttft-probe.py`, TTFT logs, 4 tool-eval reports).
+- 2026-09-03 forum sweep of the GLM-5.3-Flash ecosystem (DFlash2 drafter
+  license-blocked for commercial serving, W4A16-AutoRound checkpoint queued,
+  mixed-workload TTFT-alternation watch) — tracked in the `dgx-spark-llm-serving`
+  skill sweep notes, not the repo.
+
+### 2026-08-31
+- **Common source code for all stacks** (`ac425d3`): one
+  `docker-compose.yml` + one `exec-vllm.sh` + `stacks/<name>.env` per stack;
+  per-profile entrypoint copies and the parallel `lab/` tree retired.
+  `cluster.sh [STACK] <up|down|takeover|…>` selects the stack; `takeover`
+  = down + port-free + drop_caches + up.
+- **Default stack → `lab-vision`** (`0fb5a9c`): the actually-running
+  production profile is now the repo default.
+- **lab-vision profile** (`90fa73e`): vision ON per 0rand #127/#130
+  (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin;
+  `benchmarks.md` §9 + README quality-finding correction (`fdd22d3`).
+- `cluster.sh up()` fail-fast node-side launch (`f360fdf`); earlyoom incident
+  forensics in `NOTES-512k.md` (`784b226`); review fixes, 8 findings
+  (`3cb2788`); Apache-2.0 LICENSE (`50e3444`).
+
+### 2026-08-30
+- **Lab-quant standing config** (`e01657a`): swapped
+  `LibertAIDAI/GLM-5.3-Flash-NVFP4` → `local-inference-lab/GLM-5.3-Flash-NVFP4`
+  mixed-precision (NVFP4 experts + MXFP8 MTP) on image `glm53:lab` —
+  seed-42 hardmode 90/100, TC-81 tool-output injection fail→pass. Rollback
+  path to the LibertAIDAI k=4 profile kept config-only.
+- Methodology section + TL;DR rewrite in `benchmarks.md` (`31eca11`);
+  0rand exact-param replica (90 vs his 91) + batched-tokens 1024 fix
+  (`f019de9`).
+
+### 2026-08-29
+- Sampler A/B (greedy 89 vs t1.0 88 vs t0.6 86 → greedy stays, `f36dd62`);
+  `reasoning_effort=max` addendum — 88/100, no gain over default (`30a742a`).
+
+### 2026-08-27 → 08-28
+- 512K-context upgrade + `k=4` + 9 GiB pin standing config (`951a0ce`);
+  LibertAIDAI NVFP4 weights bring-up; upstream repo URL fix (`77ae486`).
+- Day-0 deploy: sm_121 patch chain v1→v8 (`glm53:v9`), TP=2 on RoCE,
+  262K/512K context, ~24.6 tok/s, no prompt-echo.
+
 ## Key serve flags (load-bearing — do not “clean up”)
 
 The standing lab stack's flags live in `stacks/lab.env`; the LibertAIDAI
@@ -175,7 +232,7 @@ stacks' in `stacks/v9-*.env` / `stacks/v8-262k.env`. Why each one matters:
 | `--gpu-memory-utilization 0.90` | with a pinned KV pool the engine skips memory profiling; 0.90 leaves activation headroom for the warmup forward (lower values just waste UMA) |
 | `--kv-cache-dtype fp8` / `fp8_ds_mla` + `--kv-cache-memory-bytes …` | SM90 NoPE path dequantizes in-kernel; the pin makes the pool deterministic instead of GMU-dependent |
 | `--max-model-len 524288` | 512K context; requires the image's sparse-MLA indexer CC-12.x guard |
-| `--max-num-batched-tokens 4096` (v9) / `1024` (lab) | 8192 OOMs the GB10 driver at 512K shapes; 1024 is the lab-quant proven value (the gist's 4096 OOM-kills the head worker on this quant) |
+| `--max-num-batched-tokens 4096` (v9) / `2048` (lab-vision) / `1024` (lab) | 8192 OOMs the GB10 driver at 512K shapes; 2048 is the A/B-validated value on lab-vision (−21% 24k-prefill TTFT, no OOM at the 9 GiB pin — benchmarks.md §10); 1024 is the lab-quant proven value (the gist's 4096 OOM-kills the head worker on this quant) |
 | `--kernel-config '{…autotune…:false}'` | autotune/cutedsl-warmup scratch at 512K shapes OOMs (`NV_ERR_NO_MEMORY`) |
 | `--speculative-config mtp/k` | MTP is lossless vs k; k is a speed knob. k=4 on the LibertAIDAI stacks, k=3 on the lab stack (benchmarks.md §6) |
 | `--language-model-only` | drops the ~15.7 GiB multimodal front-end; without it the pinned-KV + gm-0.90 profile OOMs at warmup on the 121.69 GiB UMA line. lab-vision turns this back on (see `stacks/lab-vision.env`) |
