@@ -760,3 +760,56 @@ tool-eval reports under `~/aiprojects/tool-eval-runs/2026/09/*eugr-glm53-spark-
 b12x-seed42*` (report + `_summary.md`). The NVFP4-Spark weights (187.7 GB) were
 left in the HF cache on both nodes — no space pressure, and re-usable if this
 is ever revisited.
+
+---
+
+## 12. MTP-3 → MTP-4 A/B on lab-vision (2026-09-06) — headline-neutral, +reliability
+
+Follow-up to §6 (which showed k=4 recovered quality on the *old* LibertAIDAI
+quant): re-test the drafter depth on the current **lab-quant lab-vision** stack
+(the standing config had only ever been MTP-3, the gist's proven depth for this
+quant).
+
+**Change:** `stacks/lab-vision.env` → `SPECULATIVE_CONFIG` `num_speculative_
+tokens` 3 → 4. Everything else identical (512K, fp8_ds_mla, 9 GiB pin, block
+256, 2048 batch, 16 seqs, gm 0.90, MTP moe/attention auto). 9 GiB pin held at k4
+— **no OOM** (warmup forward clean; the k3 OOM-line margin absorbed the extra
+draft-position scratch). Boot clean; KV pool **1,004,358 tok (1.92× @512K)**
+vs k3's 1,022,844 (−1.8% from the extra activation).
+
+**Protocol:** identical to the §10 baseline — dev39, 69-scenario standard suite,
+**seed 42, 0rand-p4 (p4, 2 trials, thinking+effort-max @ t0.1/p1, timeout 120,
+max-turns 8)**, JIT-primed before the run.
+
+| metric | MTP-3 (standing) | MTP-4 (this) | Δ |
+|---|---|---|---|
+| Quality mean (0rand-p4, dev39) | 88.5 ± 2.1 | **88.0 ± 0.0** (T1=T2=88) | −0.5 (noise) |
+| Total points | 121.0 ± 1.4 | 121.5 ± 0.7 | +0.5 |
+| Pass@2 (ceiling) | 84.1% | 85.5% | +1.4 pp |
+| Pass^2 (reliability floor) | 78.3% | **79.7%** | **+1.4 pp** |
+| Run-to-run variance | ±2.1 | **0.0** | more stable |
+
+**Per-scenario (folded over 2 trials, 69 scenarios): 5 up / 3 down = net +0.5.**
+- up: TC-21 Constraint Validation, TC-23, **TC-40 Domain Confusion**, TC-46
+  Deep Multi-Turn Research, TC-67 — note **TC-21/TC-40 are exactly the
+  k3-specific regressions §6 flagged** (they were FAIL on k3 of the old quant
+  and PASS on k4); they hold at/pass at k4 on the lab quant too.
+- down: TC-33, TC-68 (the known flaky tool-restraint wobbles), TC-60 — the
+  §10 flip-asymmetry discriminator reads this as noise, not a real regression.
+
+**Verdict:** **HEADLINE-NEUTRAL with a reliability upside.** No headline quality
+win (88.0 vs 88.5 is inside variance, and the "win" is really the lower
+variance — 88/88 vs 87/90). MTP-4:
+- recovers the known k3 weak spots (TC-21/40),
+- is measurably **more stable** (σ 0.0 vs 2.1, +1.4pp on both Pass@2 and the
+  Pass^2 reliability floor),
+- costs a touch of pool (−1.8%) and a slightly lower MTP acceptance length
+  (more draft positions, fewer hit each — the expected k4 trade from §6),
+- still boots clean at the 9 GiB pin.
+
+**Not adopted.** A reliability/stability gain with no headline quality win is a
+worse trade than the standing k3 for a production default (and §6's +1 was on a
+different quant). k3 remains the standing value; k4 is retained as a
+documented, validated alternative (flip one line in `stacks/lab-vision.env`
++ mirror + takeover to switch). **Evidence:** `glm53-labvision-mtp4-seed42`
+report + `_summary.md` in `~/aiprojects/tool-eval-runs/2026/09/`.
