@@ -30,6 +30,7 @@ sizes, and the crash forensics. Updated as each experiment lands.
 | 3 | `exec-vllm-512k-k4.sh` (**k=4, 9GiB pin**) | glm53:v9 | LibertAIDAI | **512K** | fp8, **9 GiB pin**, **MTP k=4** | **1,261,444 tok** (2.41× conc. @512K) | **89/100** (157 pts) | ~25–30 tok/s; median turn 5.9 s; MTP-4 acceptance 46.3% | retired (superseded by 4) |
 | **4** | **`lab/docker-compose-lab.yaml` (lab-quant, MTP-3, 1024 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 10 GiB pin**, block 256 | **1,164,369 tok** (2.22× conc. @512K) | **90/100** (156/174) c1 greedy; **90/100** (158/176) 0rand-param replica | 24–30 tok/s band; MTP-3 accept ~2.8–3.0, 61–67% draft acceptance @ c1 | retired (superseded by 5) |
 | **5** | **`stacks/lab-vision.env` (lab-quant, vision ON, MTP-3, 2048 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 9 GiB pin**, block 256 | **1,022,844 tok** (1.95× conc. @512K) | **92.5/100** 0rand-p4 same-harness A/B (§9); batched-tokens A/B 2048: **90.5±0.7** vs 1024 89.5±0.7 (§10) | ~25.5 prose / 28.6 code tok/s; **24k-prefill TTFT 13.9 s (−21% vs 1024)** | **ACTIVE (standing config, lab-vision default)** |
+| 6 | eugr/spark-vllm-docker `glm-5.3-flash` recipe (NVFP4-**Spark** quant, B12X stack, MTP-5) | vllm-node-b12x (dev d20260904) | local-inference-lab NVFP4-Spark | **1M** | **fp8, 10 GiB pin**, block 4608 | **1,439,711 tok** (1.37× conc. @1M) | **84.0±1.4** 0rand-p4 seed42 (dev39) — **−4.5 vs profile 5's 88.5±2.1, no CI overlap** | ~22 prose / 26 code tok/s; 24k TTFT ~12–25 s (noisy); MTP-5 accept ~69% | **tested 2026-09-06 — REJECTED (§11)** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
@@ -642,3 +643,120 @@ hex markers), and the four tool-eval reports
 **Revert (if ever needed):** `stacks/lab-vision.env` →
 `MAX_NUM_BATCHED_TOKENS=1024`, `cluster.sh mirror`, `cluster.sh lab-vision
 takeover`. 1024 remains fully validated on this stack (Phase A of this A/B).
+
+---
+
+## 11. eugr/spark-vllm-docker TP2 recipe test (2026-09-06) — REJECTED
+
+Evaluated Eugr's `eugr/spark-vllm-docker` → `recipes/glm-5.3-flash.yaml`
+(commit `94b3c30`, 2026-09-04) against the standing lab-vision profile. Goal:
+see whether the **B12X kernel stack** (attention/moe/linear all `b12x`),
+**MTP-5** drafter, **RoCE allreduce** offload, **AOT compile** (+ mega-AOT
+artifact), and **InstantTensor** buffered load beat our glm53:lab MTP-3 /
+enforce-eager / 5-lab-patch path.
+
+**Recipe shape (as shipped, unchanged):** `local-inference-lab/GLM-5.3-Flash-
+NVFP4-Spark` (the NVFP4-**Spark** repack, 187.7 GB — NOT the 199.4 GB original
+`.../GLM-5.3-Flash-NVFP4`; 8 shards differ: 4× non-expert + 3× MTP re-quantized
+smaller + index). B12X image; `--mamba-cache-mode align --dtype bfloat16
+--kv-cache-dtype fp8 --quantization modelopt_mixed --attention-backend B12X
+--moe-backend b12x --linear-backend b12x --block-size 256 --max-model-len
+1048576 --max-num-seqs 4 --max-num-batched-tokens 4096`; MTP via
+`{"method":"mtp","num_speculative_tokens":5,"moe_backend":"humming",
+"attention_backend":"B12X"}`; 10 GiB pin, gm 0.87, block resolved to **4608**
+tokens. env: `VLLM_ENABLE_ROCE_ALLREDUCE=1`/`2MB`, `VLLM_USE_AOT_COMPILE=1`,
+`VLLM_USE_MEGA_AOT_ARTIFACT=1`, `VLLM_USE_V2_MODEL_RUNNER=1`, `CUTE_DSL_ARCH=
+sm_121a`, InstantTensor buffered I/O.
+
+### Boot (three real failures, all on our side, all fixed)
+1. **Stale image.** Cached `vllm-node-b12x:latest` was a 3-weeks-old build that
+   rejected `glm5_next` ("Transformers does not recognize this architecture").
+   The recipe needs a fresh pull: `eugr/spark-vllm-b12x:latest` digest
+   `c3b44d3f…` = vLLM dev `d20260904` (transformers 5.16.1), published the day
+   Eugr shipped this recipe. Pulled + copied to both nodes.
+2. **Worker has no DNS/internet.** `10.100.90.4` (spark-cfb3) cannot resolve
+   `huggingface.co` (`getent` fails even for IP literals). vLLM's `repo_utils`
+   does an online HF file-list lookup, gets `[Errno -3] Temporary failure in
+   name resolution`, returns an **empty file list**, so **rank-1 never reaches
+   NCCL world-init**; the head's `TCPStore` times out at 601 s ("1/2 clients
+   joined"). Head `.90.1` has internet; only the worker is offline. **Fix:
+   `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`** (via eugr `.env`
+   `CONTAINER_HF_HUB_OFFLINE=1` etc.) → both ranks load from the local
+   `models--local-inference-lab--GLM-5.3-Flash-NVFP4-Spark` snapshot. This is
+   the same offline guard our own compose has already used since §8. **Standing
+   rule: any HF-Hub-based serve on this fabric must set offline env, or the
+   offline rank silently fails to join the world.**
+3. **Leftover `vllm_node` container** from a 10-day-old nightly-20260810 test
+   held the name on both nodes; `docker rm` it before a fresh launch.
+
+Boot clean after the offline fix: weights `88.62 GiB in 82.5 s`, MTP-5 drafter
+`Glm5NextMTP` active, KV pool **1,439,711 tok (1.37× conc. @1M)**, `max_model_
+len 1048576` verified on `/v1/models`.
+
+### Results (vs profile 5 / lab-vision standing config)
+Same-day, same harness **dev39**, same 69-scenario standard suite, **seed 42**,
+**0rand protocol (p4, 2 trials, thinking+effort-max @ t0.1/p1, timeout 120,
+max-turns 8)** — identical CLI to the §10 baseline:
+
+| metric | lab-vision (profile 5) | eugr B12X (this) | Δ |
+|---|---|---|---|
+| Quality (0rand-p4, dev39) | **88.5 ± 2.1** (121.0±1.4 /138) | **84.0 ± 1.4** (116.0±1.4 /138) | **−4.5 pts, CIs do NOT overlap** |
+| Prose decode (c1, 1024-out) | ~25.5 tok/s | 22.1 | −13% |
+| Code decode (c1, 1024-out) | ~28.6 tok/s | 26.0 | −9% |
+| c4 aggregate | 25.7 | 21.9 | −15% |
+| c16 aggregate | 22.5 | 21.5 | −4% |
+| 24k-prefill TTFT | 13.9 s (clean) | 12–46 s (very noisy, first-run JIT) | ~parity / noisy |
+| KV pool | 1,022,844 tok @512K | 1,439,711 tok @1M | +40% tokens (bigger ctx) |
+| Drafter | MTP-3, ~61–67% accept | MTP-5, ~69% accept | — |
+
+Per-scenario diff (folded across the 2 trials, 69 scenarios): **5 up / 9 down
+= net −5 pts**, scattered with no category concentration:
+- down: TC-37 Needle-in-Haystack, TC-38 Multi-Step Crowded Namespace, TC-40
+  Domain Confusion, TC-45 `tool_choice=required` Compliance, TC-46 Deep
+  Multi-Turn Research, TC-52 Open-Ended Research, TC-56 Notification Workflow,
+  TC-61 Async Polling, TC-69 Multi-Tool→Complex Schema
+- up: TC-21 Constraint Validation, TC-23, TC-50 Information Reveal, TC-51
+  Goal-Level Planning, TC-67
+
+The flip direction is mixed (not one-sided), which the §10 flip-asymmetry
+discriminator reads as "real but modest regression," not a crash or a
+single-category effect. Quality loss is concentrated in **multi-turn /
+agentic / tool-discipline** scenarios — exactly where the standing config is
+strongest.
+
+### Why it lost (honest read)
+- **Different quant, not an apples-to-apples kernel test.** Eugr's recipe uses
+  `NVFP4-Spark` (the smaller 187.7 GB repack), NOT our standing `NVFP4`
+  (199.4 GB) lab quant. Some of the −4.5 pts is that re-quant, not the B12X
+  kernels. To isolate the kernel path we would have to re-quant our lab weights
+  into the Spark layout — not worth it, see below.
+- **MTP-5 vs MTP-3** is a wash-to-negative: acceptance rose (69% vs ~64%) but
+  accept-length fell, and §6 already showed deeper drafter depth is NOT a
+  quality win on this stack.
+- **`max_num_seqs 4` (recipe default)** vs our 16 caps concurrency; the c16
+  probe was already queueing. Not a kernel effect, just a low recipe default.
+- **RoCE allreduce / AOT / V2-runner** gave no measurable benefit on top of our
+  already-tuned fabric + eager path; they also did not rescue quality.
+- **1M context** is nice but irrelevant to our workloads (we serve ≤512K) and
+  it *costs* a 4608-token block that shaves the pool's useful concurrency.
+
+### Verdict
+**REJECTED — keep lab-vision (profile 5) as the standing config.** The eugr
+recipe is a clean, well-engineered reference and the B12X image + offline-mode
+pattern are genuinely useful, but on our hardware/workload it is **slower
+(decode −9–15%, no prefill win after warmup), lower quality (−4.5 pts, no CI
+overlap, loss concentrated in the agentic scenarios we care about), and uses a
+different quant** — so it is not a like-for-like upgrade. The two transferable
+takeaways from the test:
+1. **Offline env is load-bearing** on this fabric (worker `.90.4` has no
+   DNS). Any future HF-Hub serve must set `HF_HUB_OFFLINE=1`/`TRANSFORMERS_
+   OFFLINE=1` (see boot item 2).
+2. **Pull the fresh B12X image** — the cached one pre-dated `glm5_next`.
+
+**Rollback performed:** the eugr `vllm_node` containers were stopped and the
+stack is back to the standing lab-vision profile (serving `glm-5.3-flash` on
+`:8000`). Evidence: `runs/bench-eugr-20260906.log`, TTFT probe runs, and the
+tool-eval reports under `~/aiprojects/tool-eval-runs/2026/09/*eugr-glm53-spark-
+b12x-seed42*` (report + `_summary.md`). The NVFP4-Spark weights (187.7 GB) were
+left in the HF cache on both nodes — no space pressure, and re-usable if this
+is ever revisited.
