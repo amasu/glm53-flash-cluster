@@ -172,6 +172,32 @@ configured stack if the endpoint dies (it skips a live boot via container age).
 Newest first. Full history: `git log --oneline` (the repo is the source of
 truth; this list tracks meaningful milestones).
 
+### 2026-09-06
+- **eugr/spark-vllm-docker TP2 B12X recipe test — REJECTED** (`f5378f0`,
+  `benchmarks.md` §11): ran Eugr's `glm-5.3-flash` recipe (B12X attention/moe/
+  linear kernels, MTP-5, 1M ctx, 10 GiB pin) end-to-end against the standing
+  lab-vision. Quality **84.0±1.4 vs 88.5±2.1** (0rand-p4 dev39, CIs do not
+  overlap; per-scenario 9 down / 5 up, loss concentrated in multi-turn/agentic
+  scenarios), decode **−9–15%** on all probes, no prefill win after warmup.
+  Confounded by their `NVFP4-Spark` repack (187.7 GB, not our lab quant). Two
+  boot gotchas fixed and documented: the cached B12X image predated
+  `glm5_next` (pulled fresh `:latest` = vLLM dev d20260904) and — load-bearing —
+  **worker `10.100.90.4` has no DNS/internet**, so vLLM's HF-Hub file-list
+  lookup fails and rank-1 never joins NCCL world-init (head times out at 601 s):
+  any HF-Hub-based serving on this fabric must set `HF_HUB_OFFLINE=1` +
+  `TRANSFORMERS_OFFLINE=1` (our compose already sets both; external recipes
+  need it added). Kept lab-vision as the standing config; NVFP4-Spark weights
+  left in the HF cache on both nodes.
+- **MTP-3 → MTP-4 A/B on lab-vision — headline-neutral + reliability, k3 kept**
+  (`73e19d8`, `benchmarks.md` §12): k4 boots clean at the 9 GiB pin (pool
+  1,004,358 tok vs 1,022,844). Same-protocol 0rand-p4/dev39/seed-42 2-trial:
+  **88.0±0.0 vs 88.5±2.1** (−0.5, inside noise; run-to-run σ 0.0 vs 2.1),
+  total points +0.5, Pass@2/Pass^2 +1.4pp, per-scenario 5 up / 3 down (net
+  +0.5) — recovers TC-21/TC-40 (the §6 k3 regressions), drops TC-33/TC-68
+  (known flaky). A stability gain without a headline quality win → k3 remains
+  the standing value; k4 retained as a documented, validated alternative
+  (one-line flip in `stacks/lab-vision.env` + mirror + takeover).
+
 ### 2026-09-03
 - **`MAX_NUM_BATCHED_TOKENS` 1024 → 2048 on `lab-vision` (adopted, `63f4e02`)**
   — paired same-day A/B (serial, single-stack, harness dev39 both sides):
@@ -277,7 +303,9 @@ from these sources:
   and upstream [vLLM PR #53906](https://github.com/vllm-project/vllm/pull/53906)
   (`glm5_next` architecture support).
 - [eugr/spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) — the b12x
-  Spark serving stack; evaluated as an alternative carrier.
+  Spark serving stack; its GLM-5.3-Flash TP2 recipe was tested end-to-end on
+  this 2-node rig on 2026-09-06 and rejected (quality and speed below the
+  standing lab-vision — `benchmarks.md` §11).
 
 **Checkpoints & quantizations**
 
