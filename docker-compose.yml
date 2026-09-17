@@ -1,6 +1,7 @@
 # GLM-5.3-Flash on 2x DGX Spark — vLLM TP=2 (single common compose file).
 #
-# ONE file for every stack (lab, lab-vision, v9-512k, v9-262k-fp8, v8-262k).
+# ONE file for every stack (lab, lab-vision, v9-512k, v9-262k-fp8, v8-262k,
+# nvfp4-dflash2).
 # The stack is selected by configuration only: the launcher (cluster.sh)
 # sources the site .env plus stacks/<STACK>.env and runs THIS file with those
 # variables in its environment. Nothing stack-specific is hardcoded here —
@@ -58,10 +59,12 @@ services:
       # staging root that CONTAINS the draft dir ($DRAFT_DIR/$DRAFT_NAME),
       # so /workspace/models/$DRAFT_NAME resolves byte-identical to the
       # 0rand recipe's `-v $DRAFT_MOUNT_DIR:/workspace/models`. Stacks
-      # WITHOUT a draft leave DRAFT_DIR unset -> the :? expands to a
-      # nonexistent source path, i.e. a harmless dangling bind mount
-      # (verified inert against the running stacks).
-      - ${DRAFT_DIR:-/nonexistent-draft-root}:/workspace/models
+      # WITHOUT a draft leave DRAFT_DIR unset -> this binds a per-stack
+      # no-op path under /tmp. Do NOT use a bare nonexistent path (e.g.
+      # /nonexistent-...): Docker auto-creates missing bind sources, which
+      # would leave a stray root-owned dir at / on both nodes on every
+      # draft-less boot (seen live 2026-09-17).
+      - ${DRAFT_DIR:-/tmp/glm53-no-draft}:/workspace/models
     entrypoint: ["/bin/bash"]
     command: ["/exec-vllm.sh"]
     environment:
@@ -161,10 +164,12 @@ services:
       # staging root that CONTAINS the draft dir ($DRAFT_DIR/$DRAFT_NAME),
       # so /workspace/models/$DRAFT_NAME resolves byte-identical to the
       # 0rand recipe's `-v $DRAFT_MOUNT_DIR:/workspace/models`. Stacks
-      # WITHOUT a draft leave DRAFT_DIR unset -> the :? expands to a
-      # nonexistent source path, i.e. a harmless dangling bind mount
-      # (verified inert against the running stacks).
-      - ${DRAFT_DIR:-/nonexistent-draft-root}:/workspace/models
+      # WITHOUT a draft leave DRAFT_DIR unset -> this binds a per-stack
+      # no-op path under /tmp. Do NOT use a bare nonexistent path (e.g.
+      # /nonexistent-...): Docker auto-creates missing bind sources, which
+      # would leave a stray root-owned dir at / on both nodes on every
+      # draft-less boot (seen live 2026-09-17).
+      - ${DRAFT_DIR:-/tmp/glm53-no-draft}:/workspace/models
     entrypoint: ["/bin/bash"]
     command: ["/exec-vllm.sh"]
     environment:
