@@ -40,6 +40,7 @@ benchmarks.md §10.
 | `v9-512k` | `glm53:v9` | LibertAIDAI | 512K, `fp8` KV 9 GiB pin, MTP k=4, LMO — primary rollback path, 89/100 |
 | `v9-262k-fp8` | `glm53:v9` | LibertAIDAI | 262K, `fp8` KV unpinned, MTP k=4, mm ON — historical A/B point |
 | `v8-262k` | `glm53:v9` | LibertAIDAI | 262K, bf16 KV, MTP k=4, mm ON — day-0 bring-up, 89/100 |
+| `nvfp4-dflash2` | `pilcothink/vllm_spark_glm53:0.28` | NVIDIA NVFP4 (`WEIGHTS_DIR_NVFP4`) + DFlash2 draft | **900K**, `fp8` KV 9 GiB pin, DFlash2 k=5 (no MTP in the checkpoint), `1024/4`, b12x backends, graphs ≤16 + async, `ESTIMATE_CUDAGRAPHS=0` — the 0rand long-context recipe; **deployed 2026-09-16 via `cluster.sh`, 95/100 hardmode (dev71/seed-42), KV pool 1,080,115 tok = 1.20x (`benchmarks.md` §14)** |
 
 Switching stacks is a config change, not a code change:
 
@@ -78,11 +79,15 @@ fail fast with a message naming the missing variable.
 | `REMOTE_DIR` | where this repo lives on both cluster nodes |
 | `WEIGHTS_DIR` | LibertAIDAI weights on both nodes (v9-*/v8-* stacks) |
 | `WEIGHTS_DIR_LAB` | lab-quant weights on both nodes (lab / lab-vision stacks) |
+| `WEIGHTS_DIR_NVFP4` | NVIDIA NVFP4 weights on both nodes (nvfp4-dflash2 stack; `fetch-weights.sh nvidia-nvfp4`) |
+| `DRAFT_DIR` | DFlash2 draft staging root on both nodes (nvfp4-dflash2 stack; contains `glm53-dflash2-orig`) |
 | `VLLM_CACHE_DIR` | vLLM/HF cache dir on both nodes |
 | `SERVING_PORT` | OpenAI endpoint port (default 8000) |
 | `MASTER_PORT` | rendezvous port for the LibertAIDAI stacks (default 29521) |
 | `MASTER_PORT_LAB` | rendezvous port for the lab stacks (default 29500) |
+| `MASTER_PORT_NVFP4` | rendezvous port for the nvfp4-dflash2 stack (default 29503) |
 | `IMAGE` / `LAB_IMAGE` | image tags (default `glm53:v9` / `glm53:lab`) |
+| `NVFP4_IMAGE` | pilcothink 0.28 runtime tag (default `pilcothink/vllm_spark_glm53:0.28`; nvfp4-dflash2 stack) |
 | `FABRIC_RANGE` | interconnect subnet, e.g. `10.0.0.0/24` |
 | `IF_NAME` | fabric interface name on both nodes (`ip link`) |
 | `NCCL_IB_HCA` | RoCE/IB HCA list (`ibdev2netdev`) |
@@ -106,7 +111,7 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 - `watchdog.sh` — probe `:SERVING_PORT`; restart via `cluster.sh takeover` (cron on the orchestrator)
 - `build-image.sh` — head: build the `glm53:v9` patch chain, ship to worker
 - `docker/lab-build.sh` — build `glm53:lab` from the vendored `docker/labbuild/` context, ship to worker
-- `fetch-weights.sh` — head: download LibertAIDAI weights + rsync to worker + verify
+- `fetch-weights.sh` — head: download LibertAIDAI weights + rsync to worker + verify; `fetch-weights.sh nvidia-nvfp4` also stages the NVIDIA NVFP4 weights + DFlash2 draft + ships the pilcothink image (nvfp4-dflash2 stack)
 - `docker/labbuild/` — vendored build context for `glm53:lab` (digest-pinned base + patches + provenance)
 - `benchmarks.md` — investigation + benchmark log (quality, speed, pools, forensics)
 - `NOTES-512k.md` — 512K upgrade notes + crash forensics + rollback
@@ -171,6 +176,52 @@ configured stack if the endpoint dies (it skips a live boot via container age).
 
 Newest first. Full history: `git log --oneline` (the repo is the source of
 truth; this list tracks meaningful milestones).
+
+### 2026-09-16
+- **`nvfp4-dflash2` stack — the 0rand long-context recipe in-repo, deployed as a
+  standing stack**: added `stacks/nvfp4-dflash2.env` (byte-identical recipe to
+  0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks: NVIDIA official
+  NVFP4 @ `09b04e5e…` + pilcothink 0.28 runtime + DFlash2 k=5 draft, 900K
+  ctx, GMU 0.88, 9 GiB fp8-KV pin, `1024/4`, b12x backends, cudagraphs ≤16 +
+  async, `ESTIMATE_CUDAGRAPHS=0`, `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`). To run
+  it the shared code gained four optional entrypoint knobs
+  (`DTYPE`, `LINEAR_BACKEND`, `MAMBA_CACHE_MODE`, `MAX_CUDAGRAPH_CAPTURE_SIZE`
+  in `exec-vllm.sh`) and an optional `${DRAFT_DIR}:/workspace/models` draft
+  mount in `docker-compose.yml` (dangling no-op for draft-less stacks —
+  verified by dry-run; `lab-vision` / `v9-512k` still resolve unchanged).
+  `fetch-weights.sh nvidia-nvfp4` stages weights + draft on both nodes and
+  ships the runtime image over the fabric. `cluster.sh` allow-list +
+  draft preflight extended. **Deployed 2026-09-16 via `cluster.sh
+  nvfp4-dflash2 up`** (the standalone 0rand launcher on :8100 was stopped and
+  retired): KV pool 1,080,115 tok = 1.20x at full context (matches the
+  recipe's launch-verified profile exactly), DFlash2 engaged
+  (acceptance 3.2–6.0), 95/100 hardmode / 167 pts dev71/seed-42, ~30.3 t/s
+  c1 decode — full record in `benchmarks.md` §14.
+
+### 2026-09-07
+- **eugr B12X post-fix image + lab checkpoint retest — PARITY, kept experimental**
+  (`benchmarks.md` §13): re-ran the §11 eugr recipe after pulling
+  `spark-vllm-docker` to `841fdcc` (V2 model-runner fix + **b12x O_DIRECT
+  loader** + MTP-drafter MoE-backend fix, image digest `b8cffdfb`), but this
+  time on **our lab checkpoint** (non-Spark = profile 5's quant, local path)
+  at our 512K shape — isolating the §11 confound (they were running the
+  `NVFP4-Spark` repack + a pre-fix image at 1M). Same-protocol 0rand-p4/
+  dev39/seed-42: **89.0±2.8 vs profile 5's 88.5±2.1 — CIs overlap = parity**
+  (and +5.0 vs §11's 84.0), so the 09-06 rejection is attributed to the
+  checkpoint variant + pre-fix image, **not** the B12X pipeline. Decodes:
+  23.9 prose / 24.7 code c1 (below profile 5's 25.5/28.6 at this batch),
+  c16 aggregate **25.1** (best of the three), 24k-TTFT 15.4 s; the b12x
+  loader cuts weight load **803 s → 60 s**. Two boot gotchas hit and fixed:
+  `--language-model-only` (mm-processor OOM-killed the worker ~8 s after
+  "Application startup complete" on our 512K/8G shape) and
+  `--served-model-name glm-5.3-flash` (else clients 404 on the canonical
+  ID). **Verdict: parity, not a win → lab-vision (profile 5) stays the
+  standing production config.** The post-fix eugr stack is retained as a
+  documented, one-command alternative (recipe `recipes/glm-5.3-flash-lab.yaml`
+  on the head `~/eugr-spark-vllm-docker`, image cached on both nodes) — the
+  right pick if/when we want the 60 s weight load, the c16 win, or a
+  no-patch-chain image. Evidence in `runs/` (`bench-matrix-b12x-lab-
+  20260907.txt`, `b12x-tool-eval-20260907.log` + summary).
 
 ### 2026-09-06
 - **eugr/spark-vllm-docker TP2 B12X recipe test — REJECTED** (`f5378f0`,

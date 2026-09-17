@@ -17,6 +17,11 @@
 #   BLOCK_SIZE               (default 256)
 #   MAX_NUM_BATCHED_TOKENS   empty = flag omitted (vLLM default)
 #   MOE_BACKEND              e.g. marlin (empty = flag omitted)
+#   DTYPE                    e.g. bfloat16 (empty = engine default, usually auto)
+#   LINEAR_BACKEND           e.g. b12x (empty = flag omitted)
+#   MAMBA_CACHE_MODE         e.g. align (empty = flag omitted)
+#   MAX_CUDAGRAPH_CAPTURE_SIZE  cudagraph capture ceiling, e.g. 16
+#                            (empty = vLLM default; also a KV-budget lever)
 #   SPECULATIVE_CONFIG       raw JSON, e.g. {"method":"mtp","num_speculative_tokens":3}
 #                            (empty = flag omitted)
 #   SWITCHES                 extra boolean flags, space separated, e.g.
@@ -61,6 +66,10 @@ args=(
 [ -n "${KV_CACHE_MEMORY_BYTES:-}" ] && args+=(--kv-cache-memory-bytes "$KV_CACHE_MEMORY_BYTES")
 [ -n "${MAX_NUM_BATCHED_TOKENS:-}" ] && args+=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")
 [ -n "${MOE_BACKEND:-}" ]           && args+=(--moe-backend "$MOE_BACKEND")
+[ -n "${DTYPE:-}" ]                 && args+=(--dtype "$DTYPE")
+[ -n "${LINEAR_BACKEND:-}" ]        && args+=(--linear-backend "$LINEAR_BACKEND")
+[ -n "${MAMBA_CACHE_MODE:-}" ]      && args+=(--mamba-cache-mode "$MAMBA_CACHE_MODE")
+[ -n "${MAX_CUDAGRAPH_CAPTURE_SIZE:-}" ] && args+=(--max-cudagraph-capture-size "$MAX_CUDAGRAPH_CAPTURE_SIZE")
 [ -n "${SPECULATIVE_CONFIG:-}" ]    && args+=(--speculative-config "$SPECULATIVE_CONFIG")
 [ -n "${KERNEL_CONFIG:-}" ]         && args+=(--kernel-config "$KERNEL_CONFIG")
 [ -n "${LIMIT_MM_PER_PROMPT:-}" ]   && args+=(--limit-mm-per-prompt "$LIMIT_MM_PER_PROMPT")

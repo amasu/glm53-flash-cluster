@@ -9,7 +9,7 @@
 #
 # usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>
 # STACK   optional; default from STACK in .env (currently: lab-vision)
-#           available: lab lab-vision v9-512k v9-262k-fp8 v8-262k
+#           available: lab lab-vision v9-512k v9-262k-fp8 v8-262k nvfp4-dflash2
 #   mirror   = rsync repo (incl. .env + stacks/) to both nodes at REMOTE_DIR
 #   takeover = down (any stale stack) + drop caches -> up <STACK>
 #   NOTE: SINGLE-STACK POLICY — one profile runs at a time; `down` removes
@@ -29,11 +29,11 @@ SERVING_PORT="${SERVING_PORT:-8000}"
 # STACK arg (e.g. `cluster.sh v9-512k up`) wins over .env; default = lab-vision
 # (the actual production profile; see the running glm53-vision-* containers)
 STACK="${STACK:-lab-vision}"
-if [[ "${1:-}" =~ ^(lab|lab-vision|v9-512k|v9-262k-fp8|v8-262k)$ ]]; then
+if [[ "${1:-}" =~ ^(lab|lab-vision|v9-512k|v9-262k-fp8|v8-262k|nvfp4-dflash2)$ ]]; then
   STACK="$1"; shift
 fi
 STACK_FILE="stacks/${STACK}.env"
-[[ -f "$STACK_FILE" ]] || { echo "FATAL: unknown/missing stack '$STACK' (want one of: lab lab-vision v9-512k v9-262k-fp8 v8-262k; file $STACK_FILE)" >&2; exit 1; }
+[[ -f "$STACK_FILE" ]] || { echo "FATAL: unknown/missing stack '$STACK' (want one of: lab lab-vision v9-512k v9-262k-fp8 v8-262k nvfp4-dflash2; file $STACK_FILE)" >&2; exit 1; }
 
 # Layering: site .env (already sourced) <- stack file (sourced later, wins:
 # pins its knobs + maps its image/weights/ports). The stack file may
@@ -63,6 +63,12 @@ preflight() {
   run_worker "cd '$REMOTE_DIR' && test -f '$STACK_FILE' || { echo 'WORKER: $STACK_FILE MISSING — run: cluster.sh mirror'; exit 1; }"
   run_worker "test -f \"$WEIGHTS_DIR/config.json\" && echo 'WORKER: weights staged' || { echo 'WORKER: weights MISSING'; exit 1; }"
   $HEAD_SSH "test -f \"$WEIGHTS_DIR/config.json\" && echo 'HEAD: weights staged' || { echo 'HEAD: weights MISSING'; exit 1; }"
+  # Draft model (only stacks that need speculative decoding set DRAFT_DIR)
+  if [[ -n "${DRAFT_DIR:-}" ]]; then
+    local draft_name="${DRAFT_NAME:-}"
+    run_worker "test -f \"$DRAFT_DIR/$draft_name/config.json\" && echo 'WORKER: draft staged' || { echo 'WORKER: draft MISSING ($DRAFT_DIR/$draft_name)'; exit 1; }"
+    $HEAD_SSH "test -f \"$DRAFT_DIR/$draft_name/config.json\" && echo 'HEAD: draft staged' || { echo 'HEAD: draft MISSING ($DRAFT_DIR/$draft_name)'; exit 1; }"
+  fi
   run_worker "docker image inspect \"$IMAGE\" >/dev/null && echo 'WORKER: image present' || { echo 'WORKER: image MISSING'; exit 1; }"
   $HEAD_SSH "docker image inspect \"$IMAGE\" >/dev/null && echo 'HEAD: image present' || { echo 'HEAD: image MISSING'; exit 1; }"
   echo "preflight OK [$STACK]"
@@ -155,6 +161,6 @@ case "${1:-}" in
   logs)      logs ;;
   takeover)  takeover ;;
   *) echo "usage: cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>" >&2
-     echo "  STACK: lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k (default: \$STACK from .env = lab-vision)" >&2
+     echo "  STACK: lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k | nvfp4-dflash2 (default: \$STACK from .env = lab-vision)" >&2
      exit 1 ;;
 esac

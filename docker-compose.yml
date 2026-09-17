@@ -53,6 +53,15 @@ services:
       - ./exec-vllm.sh:/exec-vllm.sh:ro
       - ${WEIGHTS_DIR:?WEIGHTS_DIR must be set (stacks/<STACK>.env)}:/models/model:ro
       - ${VLLM_CACHE_DIR:-/var/tmp/glm53-vllm-cache}:/cache
+      # Optional speculative-draft root, mounted at /workspace/models where
+      # the recipe's SPECULATIVE_CONFIG path expects it. DRAFT_DIR is the
+      # staging root that CONTAINS the draft dir ($DRAFT_DIR/$DRAFT_NAME),
+      # so /workspace/models/$DRAFT_NAME resolves byte-identical to the
+      # 0rand recipe's `-v $DRAFT_MOUNT_DIR:/workspace/models`. Stacks
+      # WITHOUT a draft leave DRAFT_DIR unset -> the :? expands to a
+      # nonexistent source path, i.e. a harmless dangling bind mount
+      # (verified inert against the running stacks).
+      - ${DRAFT_DIR:-/nonexistent-draft-root}:/workspace/models
     entrypoint: ["/bin/bash"]
     command: ["/exec-vllm.sh"]
     environment:
@@ -73,6 +82,10 @@ services:
       - BLOCK_SIZE
       - MAX_NUM_BATCHED_TOKENS
       - MOE_BACKEND
+      - DTYPE
+      - LINEAR_BACKEND
+      - MAMBA_CACHE_MODE
+      - MAX_CUDAGRAPH_CAPTURE_SIZE
       - SPECULATIVE_CONFIG
       - KERNEL_CONFIG
       - LIMIT_MM_PER_PROMPT
@@ -81,7 +94,11 @@ services:
       - MASTER_PORT
       - SERVING_PORT
       - VLLM_MLA_NOPE_PAD_ROPE
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN
+      - VLLM_GLM53_SPLIT_TARGET_BLOCK_SIZE
       - TORCH_USE_RTLD_GLOBAL
+      - TORCHINDUCTOR_COMPILE_THREADS
       - VLLM_USE_AOT_COMPILE
       - OMP_NUM_THREADS
       - FLASHINFER_DISABLE_VERSION_CHECK
@@ -139,6 +156,15 @@ services:
       - ./exec-vllm.sh:/exec-vllm.sh:ro
       - ${WEIGHTS_DIR:?WEIGHTS_DIR must be set (stacks/<STACK>.env)}:/models/model:ro
       - ${VLLM_CACHE_DIR:-/var/tmp/glm53-vllm-cache}:/cache
+      # Optional speculative-draft root, mounted at /workspace/models where
+      # the recipe's SPECULATIVE_CONFIG path expects it. DRAFT_DIR is the
+      # staging root that CONTAINS the draft dir ($DRAFT_DIR/$DRAFT_NAME),
+      # so /workspace/models/$DRAFT_NAME resolves byte-identical to the
+      # 0rand recipe's `-v $DRAFT_MOUNT_DIR:/workspace/models`. Stacks
+      # WITHOUT a draft leave DRAFT_DIR unset -> the :? expands to a
+      # nonexistent source path, i.e. a harmless dangling bind mount
+      # (verified inert against the running stacks).
+      - ${DRAFT_DIR:-/nonexistent-draft-root}:/workspace/models
     entrypoint: ["/bin/bash"]
     command: ["/exec-vllm.sh"]
     environment:
@@ -159,6 +185,10 @@ services:
       - BLOCK_SIZE
       - MAX_NUM_BATCHED_TOKENS
       - MOE_BACKEND
+      - DTYPE
+      - LINEAR_BACKEND
+      - MAMBA_CACHE_MODE
+      - MAX_CUDAGRAPH_CAPTURE_SIZE
       - SPECULATIVE_CONFIG
       - KERNEL_CONFIG
       - LIMIT_MM_PER_PROMPT
@@ -167,7 +197,11 @@ services:
       - MASTER_PORT
       - SERVING_PORT
       - VLLM_MLA_NOPE_PAD_ROPE
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN
+      - VLLM_GLM53_SPLIT_TARGET_BLOCK_SIZE
       - TORCH_USE_RTLD_GLOBAL
+      - TORCHINDUCTOR_COMPILE_THREADS
       - VLLM_USE_AOT_COMPILE
       - OMP_NUM_THREADS
       - FLASHINFER_DISABLE_VERSION_CHECK
