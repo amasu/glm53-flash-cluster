@@ -1,0 +1,139 @@
+================================================================================
+FORUM POST DRAFT — DGX Spark (GB10)
+Target thread area: DGX Spark / GB10 — NVIDIA Developer Forums
+Status: DRAFT — awaiting fieldiag results (placeholders marked <<<FILL-IN>>>)
+================================================================================
+
+Title:
+"Reproducible host-level hard-freezes on 2x DGX Spark after 7.6.0 OTA pushed
+driver to 580.178.04 — NVRM kernel OOM bursts precede every hang; documented
+Spark driver for 7.6.0 is 580.173.02"
+
+--------------------------------------------------------------------------------
+BODY
+--------------------------------------------------------------------------------
+
+Symptom
+-------
+Two DGX Spark (GB10) units, used as a RoCE-connected 2-node vLLM cluster, began
+hard-freezing under normal serving load within ~24h of the DGX OS 7.6.0 OTA.
+A "hard-freeze" here means: kernel still answers ICMP ping, but all userspace
+goes unresponsive — sshd stops completing the banner exchange, no shell, no
+recovery except physical power cycle. This happened 5+ times across the two
+hosts on 2026-09-15/16, on two different serving stacks (both vLLM 0.28-based,
+900K-context NVFP4 GLM-5.3-Flash; one with DFlash2 speculative decoding).
+
+The same workload class on the same hardware was stable for weeks on
+DGX OS 7.5.0 / driver 580.173.02 before the 7.6.0 OTA.
+
+What the 7.6.0 OTA changed (apt/dpkg history, 2026-09-15 13:07, both nodes)
+--------------------------------------------------------------------------
+  DGX OS release:   7.5.0 -> 7.6.0
+  Driver (open):    580.173.02 -> 580.178.04   (nvidia-driver-580-open:arm64)
+  Boot kernel:      6.17.0-1032-nvidia -> 7.0.0-1019-nvidia
+  Docker:           29.2.1 -> 29.6.2
+  +180 packages total
+
+Key discrepancy: the DGX OS 7.6.0 release notes document, for "ARM64 (DGX
+Spark)", driver 580.173.02 (Canonical signed driver) and kernel
+7.0.0-1018-nvidia. Our nodes received 580.178.04 — the datacenter-branch
+build whose release-notes support matrix lists B300/B200/GB200/H100/L40/A100/
+Quadro etc., with no mention of GB10, DGX Spark, or sm_121 — running on kernel
+7.0.0-1019 (one point newer than the documented 7.0.0-1018). Web search turns
+up no user reports for "580.178.04 DGX Spark"; the driver release is 2026-08-03
+and the Spark-side rollout appears to have happened with the 7.6.0 ISO (2026-09-14).
+
+Evidence from journals (collected after each power cycle, boot -1/-2)
+--------------------------------------------------------------------
+HEAD (<head-host>, <head-lan-ip>):
+  - Frozen boot 2026-09-16 16:28: 65 kernel-level
+    "NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory
+     [NV_ERR_NO_MEMORY] (0x00000051) returned from _memdescAlloc"
+    bursts, first at 16:27:41, continuing to 16:28:08 — ~75 s before the
+    host became fully unreachable (16:28:54).
+  - System RAM at that moment: 7.55% MemAvailable (9.4 GB of 121 GB) with
+    ~73% swap free — NOT a system OOM. earlyoom (-m 2 -s 80) did not fire.
+  - Prior boot (12:44, first bench attempt): 11x NVRM OOM bursts
+    (13:38, 14:56), same signature.
+  - No NVIDIA Xid, no kernel panic, no application exception in the death
+    windows. dockerd's last line before the hang: health-check warning +
+    "copy stream failed: reading from a closed fifo".
+
+WORKER (<worker-host>, <worker-lan-ip>):
+  - 148x the same NVRM OOM in the frozen boot, first 16:18:41 (exactly when
+    model weight loading began), last observed 17:20:29
+    ("returned from rmStatus @ sy..." — truncated by journal width; full
+    line in journalctl -b -1 -k).
+  - 16x in the 12:44 boot (first 13:29:44).
+  - Same freeze mode: ping answers, sshd banner times out on LAN and RoCE.
+
+Timeline (all times 2026-09-15/16, CEST)
+----------------------------------------
+  09-15 13:07  7.5.0->7.6.0 OTA applied on both nodes; reboot 13:09
+  09-15 17:35  boot #3 of new stack -> userspace OOM-freeze -> power cycle 19:29
+  09-15 19:45  boot #4 -> OOM-freeze -> power cycle 21:41
+  09-16 00:18  power cycle after freeze
+  09-16 10:59  clean reboot (RDMA reset)
+  09-16 12:44  clean reboot; bench attempt -> engine died 11:40 local (RPC
+               300s timeout during first spec-decode JIT compile); next boot
+               hit kernel RDMA/mlx5 wedge (ibv_reg_mr_iova2 ENOMEM) => 3/3
+               rule: NCCL init only succeeds on a host that has NOT had an
+               in-band engine death since boot
+  09-16 13:25  boot #13, engine healthy; bench started 14:56
+  09-16 14:57  worker sshd dies mid-bench (CuTeDSL JIT compile of new shapes
+               at serving time); host userspace freezes
+  09-16 16:18  attempted stack restore (lab-vision): both ranks launch clean,
+               worker loads 92.69 GiB in 242 s, head through layer 44/44
+  09-16 16:28  HEAD hard-freeze (journal above); worker userspace degrades
+               in the same window; both need power cycle
+  09-16 17:30  both nodes power-cycled, now up and idle
+
+Environment
+-----------
+  2x NVIDIA DGX Spark (GB10, sm_121, 128 GB unified memory, ConnectX-7 x4)
+  RoCEv2 interconnect <fabric-subnet> (head HEAD_IP, worker WORKER_IP)
+  DGX OS 7.6.0, Ubuntu 24.04.5 base, kernel 7.0.0-1019-nvidia
+  nvidia-driver-580-open 580.178.04-0ubuntu0.24.04.1
+  docker 29.6.2, vLLM 0.28 (both experiments), GLM-5.3-Flash NVFP4 900K ctx
+  earlyoom -m 2 -s 80 with vLLM on the avoid list (never killed the engine)
+  Idle thermals both nodes: all ACPI zones 37-45 C, GPU 45 C @ ~4 W
+  No OOM-killer events in any death window; no Xid errors; no panics
+
+What I have NOT ruled out yet
+-----------------------------
+  <<<FILL-IN: fieldiag result head (PASS/FAIL + MODS codes)>>>
+  <<<FILL-IN: fieldiag result worker (PASS/FAIL + MODS codes)>>>
+  <<<FILL-IN: fwupdmgr list (EC/PCIe/ConnectX firmware versions)>>>
+
+Requests
+--------
+1. Confirmation whether 580.178.04 on GB10 is an intended 7.6.0 configuration
+   or a repo-pinning artifact (release notes say 580.173.02 signed for Spark).
+   If it is intended, is there a known issue with the R580 datacenter branch
+   on sm_121 that matches "kernel NVRM _memdescAlloc ENOMEM bursts during
+   normal GPU load, then whole-host userspace hang"?
+2. The 580.173.02 line only ships prebuilt GB10 modules for 6.17.x kernels on
+   7.6.0 — so reverting the driver on the current 7.0.0-1019 kernel would
+   also require a kernel downgrade. Is there any other supported path back
+   to the documented Spark driver stack on 7.6.0?
+3. If fieldiag PowerStress fails on either unit, please point me to the RMA
+   flow (nvidia.custhelp.com vs developer portal) so I can file with the log
+   bundles.
+
+Attachments (on request): full `journalctl -b -1 -k` extracts from both nodes,
+fieldiag log bundles under /opt/nvidia/dgx-spark-fieldiag/dgx/logs-*/, and the
+earlyoom memory curves around each freeze.
+
+================================================================================
+PLACEHOLDERS TO FILL IN BEFORE POSTING
+================================================================================
+1. <<<FILL-IN: fieldiag result head>>>    — from `sudo bash /tmp/run-fieldiag.sh`
+                                           on <head-lan-ip>
+2. <<<FILL-IN: fieldiag result worker>>>  — same on <worker-lan-ip>
+3. <<<FILL-IN: fwupdmgr list>>>           — `sudo fwupdmgr list` on both
+4. Optional: user's account handle for the forum
+5. Optional: serial numbers (inforom: Product NVIDIA_DGX_Spark, SKU 0000)
+
+Note for the user: do NOT post before filling items 1-3 — without the fieldiag
+results the post reads as "please look at this", and with them it reads as
+"here is a reproducible driver-branch regression with hardware ruled in/out".
