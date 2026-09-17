@@ -95,8 +95,11 @@ echo "==> rsync to worker over fabric"
 ssh "$WORKER_IP" "mkdir -p $DIR"
 rsync -a --info=progress2 "$DIR/" "$WORKER_IP:$DIR/"
 
-echo "==> verify worker copy"
-ssh "$WORKER_IP" "cd $DIR && sha256sum -c /tmp/glm53-checksums.txt 2>/dev/null || sha256sum config.json generation_config.json; ls *.safetensors | wc -l; du -sh $DIR"
+echo "==> rsync checksum anchors to worker (real verification, not just a count)"
+rsync -a /tmp/glm53-checksums.txt "$WORKER_IP:/tmp/glm53-checksums.txt"
+
+echo "==> verify worker copy (sha256sum -c must PASS; set -e aborts on mismatch)"
+ssh "$WORKER_IP" "cd $DIR && sha256sum -c /tmp/glm53-checksums.txt && ls *.safetensors | wc -l && du -sh $DIR"
 
 # --- nvidia-nvfp4 extras: the DFlash2 draft + the runtime image -------------
 if [[ "${1:-libertai}" == "nvidia-nvfp4" ]]; then

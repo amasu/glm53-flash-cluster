@@ -30,7 +30,7 @@ cd "$(dirname "$0")"
 : "${WORKER_IP:?set WORKER_IP in .env (see example.env)}"
 IMAGE="${IMAGE:-glm53:v9}"
 
-REPO_DIR="${REPO_DIR:-$HOME/glm53-flash-cluster/tonyd2wild-repo}"
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")" && pwd)/tonyd2wild-repo}"
 BASE_IMAGE="${BASE_IMAGE:-vllm/vllm-openai:glm53-flash-arm64-cu130}"
 # production chain: Dockerfile source file -> output tag
 STAGES=(

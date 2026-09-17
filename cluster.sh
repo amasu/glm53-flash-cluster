@@ -127,14 +127,17 @@ takeover() {
   echo "==> Takeover: stopping any stale stack, then bringing up [$STACK]"
   down
   echo "==> Waiting for :$SERVING_PORT to free"
-  local i
+  local i busy=1
   for i in $(seq 1 60); do
     if $HEAD_SSH "ss -ltn | grep -q ':${SERVING_PORT}\\b'"; then
       echo "port $SERVING_PORT still busy (round $i/60, 10s)"; sleep 10
     else
-      echo "port $SERVING_PORT free"; break
+      echo "port $SERVING_PORT free"; busy=0; break
     fi
   done
+  # Backstop: never launch into a busy port (network_mode: host would make
+  # the ranks crash-loop instead of failing fast).
+  [[ "$busy" -eq 0 ]] || { echo "FATAL: port $SERVING_PORT still busy after 60 rounds (10 min) — free it manually, aborting takeover" >&2; exit 1; }
   echo "==> Dropping page caches"
   $HEAD_SSH 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
   run_worker 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null' 2>/dev/null || true
