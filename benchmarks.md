@@ -31,6 +31,8 @@ sizes, and the crash forensics. Updated as each experiment lands.
 | **4** | **`lab/docker-compose-lab.yaml` (lab-quant, MTP-3, 1024 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 10 GiB pin**, block 256 | **1,164,369 tok** (2.22× conc. @512K) | **90/100** (156/174) c1 greedy; **90/100** (158/176) 0rand-param replica | 24–30 tok/s band; MTP-3 accept ~2.8–3.0, 61–67% draft acceptance @ c1 | retired (superseded by 5) |
 | **5** | **`stacks/lab-vision.env` (lab-quant, vision ON, MTP-3, 2048 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 9 GiB pin**, block 256 | **1,022,844 tok** (1.95× conc. @512K) | **92.5/100** 0rand-p4 same-harness A/B (§9); batched-tokens A/B 2048: **90.5±0.7** vs 1024 89.5±0.7 (§10) | ~25.5 prose / 28.6 code tok/s; **24k-prefill TTFT 13.9 s (−21% vs 1024)** | **ACTIVE (standing config, lab-vision default)** |
 | 6 | eugr/spark-vllm-docker `glm-5.3-flash` recipe (NVFP4-**Spark** quant, B12X stack, MTP-5) | vllm-node-b12x (dev d20260904) | local-inference-lab NVFP4-Spark | **1M** | **fp8, 10 GiB pin**, block 4608 | **1,439,711 tok** (1.37× conc. @1M) | **84.0±1.4** 0rand-p4 seed42 (dev39) — **−4.5 vs profile 5's 88.5±2.1, no CI overlap** | ~22 prose / 26 code tok/s; 24k TTFT ~12–25 s (noisy); MTP-5 accept ~69% | **tested 2026-09-06 — REJECTED (§11)** |
+| **7** | **eugr recipe, post-fix image `841fdcc` + b12x loader (digest `b8cffdfb`), lab checkpoint, 512K, MTP-5, 8G pin, batch 4096, `--language-model-only --served-model-name glm-5.3-flash`** | **vllm-node-b12x (dev d20260907)** | **local-inference-lab NVFP4 (lab, non-Spark = profile 5 checkpoint)** | **512K** | **fp8, 8 GiB pin**, block 256 | **1,071,877 tok** (2.04× conc. @512K) | **89.0±2.8** 0rand-p4 seed42 (dev39) — **parity with profile 5 (88.5±2.1), CIs overlap**; +5.0 vs profile 6 (84.0) ⇒ the 09-06 rejection was checkpoint+pre-fix-image, not B12X | 23.9 prose / 24.7 code c1; c4 25.0 / c16 25.1; 24k TTFT 15.4 s settled @4096-batch; **weight load 60 s (vs 803 s)** | **tested 2026-09-07 — PARITY, kept experimental (§12)** |
+| **8** | **`stacks/nvfp4-dflash2.env` (0rand recipe: NVIDIA NVFP4 + DFlash2 k=5, 900K, 1024/4)** | **pilcothink 0.28 (b12x runtime)** | **nvidia NVFP4** @ `09b04e5e` + incoai DFlash2 draft | **900K** | **fp8, 9 GiB pin**, block 256 | **1,080,115 tok** (1.20× conc. @900K) | **95/100** (167/176 pts) 0rand-p4 seed42 (**dev71** — newer harness than the dev39 rows, not cross-comparable without a control re-run, §14) | 30.3–34.4 t/s decode c1 @pp1024/tg512 d0–8K; DFlash2 acceptance 3.2–6.0/5 | **DEPLOYED 2026-09-16 via `cluster.sh` (§14)** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
@@ -813,3 +815,189 @@ different quant). k3 remains the standing value; k4 is retained as a
 documented, validated alternative (flip one line in `stacks/lab-vision.env`
 + mirror + takeover to switch). **Evidence:** `glm53-labvision-mtp4-seed42`
 report + `_summary.md` in `~/aiprojects/tool-eval-runs/2026/09/`.
+
+## 13. eugr B12X post-fix image + lab checkpoint retest (2026-09-07) — PARITY, kept experimental
+
+§11 (2026-09-06) rejected the eugr recipe at **84.0±1.4** vs profile 5's
+**88.5±2.1** (CIs did not overlap). That run conflated THREE variables:
+(i) the **pre-fix image** (dev d20260904), (ii) the **`-Spark` checkpoint
+variant** (`local-inference-lab/GLM-5.3-Flash-NVFP4-Spark` — the one the
+forum flagged as the lower-quality "dumb" quant), and (iii) a **1M**
+context / 4096-batch / 10G-pin shape. The 2026-09-07 forum evidence
+(hypermac.6502/0rand, thread 381350) said the B12X *backend* bugs were
+fixed in the nightly image (91–93 non-spark / TP4) AND that the `-Spark`
+variant was the quality culprit, not the B12X pipeline.
+
+This retest isolates it: **post-fix image + our standing lab checkpoint,
+at our 512K shape**, to test the specific claim that the 09-06 rejection
+was checkpoint+pre-fix-image, not B12X.
+
+### What changed vs §11
+- **Image:** eugr `spark-vllm-docker` commit `841fdcc` (3 commits: `d707309`
+  V2 model-runner regression fix, `76129dd` KV 10G→8G + loader swap,
+  `841fdcc` **b12x O_DIRECT loader** + `VLLM_PRESET_PRS="54788"` MTP/EAGLE
+  draft MoE-backend fix). Prebuilt `eugr/spark-vllm-b12x:latest` digest
+  `sha256:b8cffdfb…` (2026-09-07T12:28Z), verified byte-identical on both
+  nodes before launch.
+- **Checkpoint:** `local-inference-lab/GLM-5.3-Flash-NVFP4` (lab, **non-Spark**
+  = profile 5's production quant) via local path `/var/tmp/glm-5.3-flash-lab-nvfp4`
+  (no download). Recipe `recipes/glm-5.3-flash-lab.yaml` = upstream
+  `glm-5.3-flash.yaml` with model→local path, `max_model_len` 524288, and two
+  required flags we hit in two failed boots: **`--language-model-only`**
+  (first boot OOM-killed the worker ~8 s after "Application startup complete"
+  = mm-processor OOM class on our 512K/8G shape) and **`--served-model-name
+  glm-5.3-flash`** (else clients 404 on the canonical ID).
+- **Shape:** 512K ctx, 8 GiB KV pin, block 256, MTP-5, batch 4096, gm 0.87,
+  B12X attention/moe/linear, b12x load format, fp8 KV.
+- **Launch:** `./run-recipe.sh glm-5.3-flash-lab --no-ray
+  -v /var/tmp/glm-5.3-flash-lab-nvfp4:/var/tmp/glm-5.3-flash-lab-nvfp4`
+  (volume MUST be explicit — launch-cluster.sh only mounts HF + kernel caches
+  by default; container name is `vllm_node`). Old stack downed first
+  (`cluster.sh down`), GLM watchdog cron paused for the window.
+
+### Boot
+Engine init 98 s. **b12x O_DIRECT loader: 92.85 GiB in 60 s** (vs ~803 s on
+the lab instanttensor-era profile) — the loader swap is a genuine boot-time
+win. KV pool **1,071,877 tokens @ 8G / 512K (2.04× conc)**. vLLM
+`v0.1.dev20596+g2a979314d.d20260907`. Clean smoke (correct math, clean
+reasoning/content split, finish:stop), stable ~1 h, 0 worker deaths.
+
+### Results (vs profile 5 / lab-vision standing config; §11 eugr pre-fix)
+Same-day, same harness **dev39**, **seed 42**, **0rand-p4 (hardmode, p4,
+2 trials, thinking+effort-max @ t0.1/p1, timeout 360, max-turns 32)**:
+
+| metric | profile 5 (lab-vision, §10) | §11 eugr pre-fix (-Spark,1M) | **§13 eugr post-fix (lab,512K)** |
+|---|---|---|---|
+| Quality (0rand-p4, dev39) | **88.5±2.1** (121±1.4/138) | 84.0±1.4 (116±1.4/138) | **89.0±2.8** (T1 87 / T2 91, 156.5±4.9 pts/176) |
+| CI vs profile 5 | — | no overlap (reject) | **overlap → parity** |
+| Prose decode c1 (1024-out) | ~25.5 | 22.1 | 23.9 |
+| Code decode c1 (1024-out) | ~28.6 | 26.0 | 24.7 |
+| c4 / c16 aggregate | 25.7 / 22.5 | 21.9 / 21.5 | 25.0 / 25.1 |
+| 24k-prefill TTFT (settled) | 13.9 s | 12–25 s (noisy) | ~15.4 s @4096-batch |
+| Weight load | ~803 s | — | **60 s** |
+| KV pool @512K | 1,022,844 tok @9G | 1,439,711 @1M | 1,071,877 tok @8G |
+
+Quality: **89.0±2.8 vs 88.5±2.1 — CIs overlap = parity**, and **+5.0 vs §11's
+84.0**. The 09-06 rejection is thereby attributed to the **checkpoint
+variant + pre-fix image**, NOT the B12X pipeline. The post-fix B12X stack on
+our lab checkpoint recovers profile-5-level quality. Decodes land just below
+profile 5's c1 (23.9/24.7 vs 25.5/28.6) at this shape/batch; c16 aggregate
+(25.1) is the highest of the three. Pass@2 87.5% / Pass^2 81.8%, gap 5.7pp
+(high variance — consistency issue, not a capability drop); 6 unstable
+scenarios (TC-33/50/61/69/76/88) — TC-50/61 are the known tool-restraint
+wobbles, the rest single-trial flips. Safety 77–85% (2 warnings T1, 1 T2),
+above the 50% gate.
+
+### Why not adopted yet
+Quality is **parity, not a win** over the standing profile 5, and decodes are
+slightly slower at c1. The concrete wins (60 s weight load, c16 aggregate,
+fixed B12X backend) are real but profile 5 already meets the bar and is the
+validated, watched, production default. Also still experimental per eugr's
+own changelog ("please update the repository often"). Revert to profile 5 for
+the standing config.
+
+**Verdict: PARITY — keep lab-vision (profile 5) as the standing production
+config; §13 eugr post-fix image + lab checkpoint is retained as a validated,
+documented alternative** (the right choice if/when we want the 60 s weight
+load, higher c16, or a no-patch-chain image). To switch: undeploy lab-vision,
+`cd ~/eugr-spark-vllm-docker && ./run-recipe.sh glm-5.3-flash-lab --no-ray
+-v /var/tmp/glm-5.3-flash-lab-nvfp4:/var/tmp/glm-5.3-flash-lab-nvfp4`, then
+resume the GLM watchdog. To revert back: `./cluster.sh takeover lab-vision`.
+**Evidence:** `bench-matrix-b12x-lab-20260907.txt` +
+`b12x-tool-eval-20260907.log` + `runs/2026-09-07T15-52-56…--eugr-b12x-lab-20260907_summary.md`
+in `~/aiprojects/glm53-flash-cluster/runs/`.
+
+## 14. 0rand NVFP4 + DFlash2 900K recipe in-repo & deployed (2026-09-16) — DEPLOYED
+
+The 0rand long-context recipe
+([0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks](https://github.com/0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks))
+became a first-class in-repo stack: **`stacks/nvfp4-dflash2.env`**, byte-identical
+recipe to the reference repo. Unlike every in-repo profile it uses three things
+none of them had: the **`pilcothink/vllm_spark_glm53:0.28`** runtime image
+(b12x MoE/linear backends), the **NVIDIA official NVFP4** checkpoint
+(`nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e74bca08ca8549fc736d4cdd8624bfde3`,
+33 shards / 191 GiB) — which ships **zero MTP/nextn tensors** (0 `mtp`/`nextn`
+of 147,661), making MTP speculation impossible — and the **mandatory incoai
+`GLM-5.3-Flash-DFlash2` draft** (2.2 GiB) mounted at `/workspace/models`.
+
+### Recipe shape (`stacks/nvfp4-dflash2.env`)
+900,096 ctx · GMU 0.88 (the 0.28 image's admission check rejects 0.885 by 0.41
+GiB) · `fp8` KV 9 GiB pin · block 256 · seqs 4 · batch 1024 · `--dtype
+bfloat16` · `--moe-backend b12x --linear-backend b12x` · `--mamba-cache-mode
+align` · cudagraphs ≤16 (no `--enforce-eager`) · `--async-scheduling` ·
+`--no-enable-flashinfer-autotune` · DFlash2 k=5 (probabilistic draft, standard
+rejection, no adaptive verification, no block drop) ·
+`VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0` (the graph-mode estimator would
+reserve ~2.1 GiB of KV) · `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`. Rendezvous
+`MASTER_PORT_NVFP4=29503`, serving on the shared `SERVING_PORT=8000`.
+
+### Code changes required to fit the recipe into this repo's shape
+- `exec-vllm.sh`: four new optional knobs (`DTYPE`, `LINEAR_BACKEND`,
+  `MAMBA_CACHE_MODE`, `MAX_CUDAGRAPH_CAPTURE_SIZE`) — all omitted for existing
+  stacks; verified the emitted argv matches the reference launch flag-for-flag
+  (only deltas: `--kv-cache-memory-bytes` vs the `--kv-cache-memory` prefix —
+  same flag, same value, prefix-matching verified on the 0.28 build — and port
+  8000 vs 8100 by design).
+- `docker-compose.yml`: optional `${DRAFT_DIR}:/workspace/models` mount
+  (dangling no-op for draft-less stacks; verified inert) + the recipe's env
+  vars in the passthrough lists.
+- `fetch-weights.sh nvidia-nvfp4`: stages NVIDIA weights (33-shard check,
+  revision-pinned) + DFlash2 draft on both nodes, ships the runtime image over
+  the fabric, verifies. Reads the recipe knobs from the stack file (one source
+  of truth).
+- `cluster.sh`: `nvfp4-dflash2` allow-list + draft preflight.
+
+### Boot (deployed via `cluster.sh nvfp4-dflash2 up`, 2026-09-16)
+Staged the already-cached weights (191G head-local copy + RoCE rsync) and
+draft at `WEIGHTS_DIR_NVFP4` / `DRAFT_DIR` on both nodes; preflight passed
+(ports free, weights/draft staged, image present ×2); worker rank 1 → head
+rank 0. **KV pool 1,080,115 tokens = 1.20× concurrency @ 900K — identical to
+the recipe's launch-verified profile.** Graph capture 11 s / 0.10 GiB,
+`Application startup complete` ~17 min to serving (weights load from local
+EXT4: head ~270 s, worker ~221 s). One cosmetic boot warning:
+`VLLM_GLM53_SPLIT_TARGET_BLOCK_SIZE` is flagged "Unknown vLLM environment
+variable" by this image build — harmless (the reference launcher sets it too).
+One-time DFlash2 note: the draft does not take external multimodal embeddings
+(text-only draft inputs).
+
+### Quality — hardmode, 88 scenarios, parallel 4, seed 42, effort high
+**95/100 (167/176 pts)** — 82 full-pass, 3 partial (TC-11, TC-61, TC-62),
+3 fail (TC-43 Omitted Required Parameter, TC-51 Goal-Level Planning, TC-68
+Schema Violation Resistance); weakest category Autonomous Planning (67%);
+e2e 990 s. Run on **tool-eval-bench dev71** (the Mac copy was updated
+dev39→dev71 and the head's stale dev29 build reinstalled from the git repo
+before the suite ran).
+**Harness caveat: dev71 rows are NOT comparable to the dev39 rows above**
+without a control re-run on dev71 (see the two-history / harness-version
+rules in §Methodology). TC-51/TC-68 also failed on the pre-deploy standalone
+run (same day, same harness) — reproducible at this profile, not flake.
+
+### Speed — pp1024/tg512, c1 (llama-benchy, via tool-eval-bench)
+| depth | decode (t/s) |
+|---|---|
+| 0 | 30.3 |
+| 2048 | 31.9 |
+| 8192 | 34.4 |
+
+(The reference repo reports 32.0 / 40.3 / 28.8 / 33.7 across its pp1024/tg1024
+and tg512 probes; our d0 lands in range, d2K/8K straddle — single-bench noise
+at this shape.) Spec-bench (warmed run): structured acceptance 88–93%
+(τ 5.4–5.7), code 71–82%, filler 39–50% @8K; DFlash2 acceptance in steady state
+3.2–6.0/5 (100% on counting prompts).
+
+### Vision — yes, fully multimodal
+`Glm5NextForConditionalGeneration` with a 24-layer `glm5_next_vision` tower;
+347 `model.visual.*` tensors in the 147,661-tensor checkpoint (the "no MTP
+heads" caveat of the recipe only concerns speculative heads, not vision).
+Live check on the deployed endpoint: 448×448 PNG (red square on white) via
+`/v1/chat/completions` → "Red", 288 prompt tokens. The repo's hardmode suite
+is text-only, so the 95/100 does not cover vision quality.
+
+**Verdict: DEPLOYED as `stacks/nvfp4-dflash2.env` on this fabric — the 0rand
+standalone launcher (`/home/amasu/glm53f-nvidia-nvfp4-dflash`, :8100) was
+stopped and retired; this stack owns `:8000` under `cluster.sh`.**
+**Evidence:** spec-warm1/2 + throughput logs + `run-tests-mac.out` in
+`~/aiprojects/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks/logs/`, hardmode
+raw log `/var/tmp/hardmode-repl-20260916-214400.log` (all pre-deploy, standalone
+launcher, dev71), and the `cluster.sh` boot log on the head
+(`docker logs glm53-head`).
