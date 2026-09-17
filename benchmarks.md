@@ -10,7 +10,10 @@ sizes, and the crash forensics. Updated as each experiment lands.
   Both: 320B total / 18B active, `glm5_next` NoPE sparse-MLA + KDA.
 - **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `<head-host>` (rank 0, fabric IP `HEAD_IP`), worker (`WORKER_IP`, rank 1, headless).
 - **Endpoint:** `http://<head-host>:$SERVING_PORT/v1` — served name `glm-5.3-flash` (Hermes default provider).
-- **Image (ACTIVE):** `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad). `glm53:v9` (tonyd2wild chain) retained on both nodes for rollback.
+- **Image (ACTIVE):** `pilcothink/vllm_spark_glm53:0.28` — the standing
+  `nvfp4-dflash2` stack (§14). Historical/rollback images:
+  `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad) and
+  `glm53:v9` (tonyd2wild chain), both retained on both nodes.
 - **Bench harness:** `tool-eval-bench` (dev24 → dev32 over the log's lifetime; see §Methodology), hardmode, **seed 42**, 88 scenarios. Two protocols were used: **c1/greedy** (standing quality protocol) and the **0rand-param replica** (parallel 4, trials 2, temp 0.1 — see §8).
 - **Watchdog:** `watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the configured stack if down.
 

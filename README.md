@@ -372,6 +372,10 @@ from these sources:
 
 - Upstream model: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
   (320B MoE, released 2026-08-26).
+- [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4)
+  — NVIDIA's official NVFP4 quant, the checkpoint behind the standing
+  `nvfp4-dflash2` stack (rev `09b04e5e…`, staged by `fetch-weights.sh
+  nvidia-nvfp4`). Ships no MTP/nextn tensors — hence the draft below.
 - [LibertAIDAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/LibertAIDAI/GLM-5.3-Flash-NVFP4)
   — uniform NVFP4 quant staged by `fetch-weights.sh` (the v9-*/v8-* stacks).
 - [local-inference-lab/GLM-5.3-Flash-NVFP4](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-NVFP4)
@@ -379,18 +383,37 @@ from these sources:
 - [0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks](https://github.com/0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks)
   — packaging of the lab quant for 2× Spark.
 
+**DFlash2 draft & the nvfp4-dflash2 runtime (the standing default)**
+
+- [0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks](https://github.com/0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks)
+  — the long-context recipe (`stacks/nvfp4-dflash2.env` is byte-identical to
+  it): NVIDIA official NVFP4 + DFlash2 k=5, 900K ctx, cudagraphs + async
+  scheduling on the 0.28 runtime. The stack header documents the provenance
+  and the launch-verified profile (95/100 hardmode on this rig).
+- [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+  — the mandatory speculative draft for the official NVFP4 checkpoint (it
+  ships zero MTP tensors). **License note: CC BY-NC-ND 4.0 — non-commercial
+  serving only**; commercial licensing via Inco AI (inco.ai).
+- [pilcothink/vllm_spark_glm53:0.28](https://hub.docker.com/r/pilcothink/vllm_spark_glm53)
+  — the 0.28 runtime image that ships the b12x MoE/linear backends and the
+  DFlash2 method the standing stack runs on.
+
 **512K-context & lab-quant recipes**
 
 - NVIDIA forum thread
   [GLM-5.3-Flash: 320B total parameters / 18B active](https://forums.developer.nvidia.com/t/glm-5-3-flash-320b-total-parameters-18b-active/381350):
-  post 55 (0rand) — 512K-context recipe; post #124 — the `1024/16` sizing.
+  post 55 (0rand) — 512K-context recipe; post #124 — the `1024/16` sizing;
+  posts #127/#130 — the lab-vision mm config.
 - [FujitsuPolycom/glm53-flash-tp2-spark](https://github.com/FujitsuPolycom/glm53-flash-tp2-spark)
   (Apache-2.0) — the `sparse_attn_indexer*.patch` pair (CC-12.x guard) and the
   `model.patch` + `modelopt.patch` lab-checkpoint patches, vendored in
   `docker/labbuild/` and mirrored by `docker/patch_v9_512k.py`.
 - **kilork** — the `local-inference-lab` mixed-precision recipe
   ([gist](https://gist.github.com/kilork/a887667f4f423b7cc324859cd5e32ebd),
-  92/100 hardmode, incl. the `--enforce-eager` quality finding).
+  92/100 hardmode, incl. the `--enforce-eager` quality finding) and the
+  [sm121-launcher](https://git.kilork.org/kilork/sm121-launcher) whose
+  `recipe.toml` the vendored lab build context mirrors
+  (`docker/labbuild/README.md`).
 - [kingjones30/GLM-5.3-Flash-2x-DGX-Spark](https://github.com/kingjones30/GLM-5.3-Flash-2x-DGX-Spark)
   — the NoPE-MLA rope-pad + sm120 topk mod (`patch_mla.py`, vendored in
   `docker/labbuild/`; engaged via `VLLM_MLA_NOPE_PAD_ROPE=1`).
