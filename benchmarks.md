@@ -8,8 +8,8 @@ sizes, and the crash forensics. Updated as each experiment lands.
   `378ca545…` (MIXED_PRECISION: NVFP4 experts + MXFP8 MTP drafter, 186 GB).
   Retired: `LibertAIDAI/GLM-5.3-Flash-NVFP4` (uniform NVFP4, 182 GiB) — kept for rollback.
   Both: 320B total / 18B active, `glm5_next` NoPE sparse-MLA + KDA.
-- **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `aitopatom-6253` (rank 0, 10.100.90.1), worker `10.100.90.4` (rank 1, headless).
-- **Endpoint:** `http://aitopatom-6253.local:8000/v1` — served name `glm-5.3-flash` (Hermes default provider).
+- **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `<head-host>` (rank 0, fabric IP `HEAD_IP`), worker (`WORKER_IP`, rank 1, headless).
+- **Endpoint:** `http://<head-host>:$SERVING_PORT/v1` — served name `glm-5.3-flash` (Hermes default provider).
 - **Image (ACTIVE):** `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad). `glm53:v9` (tonyd2wild chain) retained on both nodes for rollback.
 - **Bench harness:** `tool-eval-bench` (dev24 → dev32 over the log's lifetime; see §Methodology), hardmode, **seed 42**, 88 scenarios. Two protocols were used: **c1/greedy** (standing quality protocol) and the **0rand-param replica** (parallel 4, trials 2, temp 0.1 — see §8).
 - **Watchdog:** `watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the configured stack if down.
@@ -302,7 +302,7 @@ per-scenario verdicts + notes) with markdown reports under
 `data/benchmarks.sqlite` here.
 
 **Standing quality protocol (used for profiles 0–3, and profile 4's first bench):**
-`--seed 42 --hardmode --backend vllm --base-url http://aitopatom-6253.local:8000/v1`,
+`--seed 42 --hardmode --backend vllm --base-url http://<head-host>:8000/v1`,
 **c1 sequential**, thinking ON, **temperature 0.0 (greedy)**, `max_turns 8`,
 request timeout 120 s, ~35 min per run. All profile comparisons in §3–§7 use this
 protocol, so they are apples-to-apples.
@@ -472,8 +472,8 @@ rollback / stack-switching is a config change, not a code change:
 
 ## Ops notes
 
-- Orchestrator (Mac) → head: `ssh aitopatom-6253.local`; worker is two-hop:
-  `ssh 6253 "ssh 10.100.90.4 ..."` (direct ssh to .90.4 times out).
+- Orchestrator (Mac) → head: `ssh $HEAD_HOST`; worker is two-hop:
+  `ssh $HEAD_HOST "ssh $WORKER_IP ..."` (direct ssh to the worker times out on this fabric).
 - `cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>` drives
   every stack with the same command shape; `up` launches worker rank 1 then
   head rank 0. **Single-stack policy:** only one GLM stack serves :8000 at a
@@ -676,7 +676,7 @@ sm_121a`, InstantTensor buffered I/O.
    The recipe needs a fresh pull: `eugr/spark-vllm-b12x:latest` digest
    `c3b44d3f…` = vLLM dev `d20260904` (transformers 5.16.1), published the day
    Eugr shipped this recipe. Pulled + copied to both nodes.
-2. **Worker has no DNS/internet.** `10.100.90.4` (spark-cfb3) cannot resolve
+2. **Worker has no DNS/internet.** The worker (`WORKER_IP`) cannot resolve
    `huggingface.co` (`getent` fails even for IP literals). vLLM's `repo_utils`
    does an online HF file-list lookup, gets `[Errno -3] Temporary failure in
    name resolution`, returns an **empty file list**, so **rank-1 never reaches

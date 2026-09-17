@@ -1,5 +1,14 @@
 # GLM-5.3-Flash 512K-context + FP8-KV upgrade (2026-08-28)
 
+> **Historical note (2026-08-31):** the per-profile entrypoints named below
+> (`exec-vllm-512k.sh`, `exec-vllm-262k-fp8.sh`, `exec-vllm-262k.sh`) were
+> retired by the common-source refactor — one `exec-vllm.sh` + one
+> `docker-compose.yml` now serve every stack via `stacks/<STACK>.env`
+> (see README "One source of code, many stacks"). The flag sets described
+> here live on as the corresponding stack files; profile names map:
+> `exec-vllm.sh` → `v9-512k`, `exec-vllm-262k-fp8.sh` → `v9-262k-fp8`,
+> `exec-vllm-262k.sh` → `v8-262k`.
+
 ## Outcome
 
 | profile | image | ctx | KV pool | quality (seed-42 hardmode) | status |
@@ -146,7 +155,7 @@ headroom (`exec-vllm-512k-k4.sh`):
   then `cluster.sh down && cluster.sh up`.
 
 ## Incident 2026-08-31 — head endpoint down: earlyoom killed the rank-0 worker
-**Symptom:** `:8000` down on `aitopatom-6253`; `glm53-head` Exited (0) while
+**Symptom:** `:8000` down on the head node; `glm53-head` Exited (0) while
 `glm53-worker` stayed Up (orphaned rank 1).
 **Root cause:** the head node's `earlyoom` (sparkrun-installed,
 `/etc/default/earlyoom`: `-m 2 -s 80 --prefer '(vllm|VLLM|...|python)'

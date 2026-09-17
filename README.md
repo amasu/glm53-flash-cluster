@@ -114,6 +114,8 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 - `docker/lab-build.sh` — build `glm53:lab` from the vendored `docker/labbuild/` context, ship to worker
 - `fetch-weights.sh` — head: download LibertAIDAI weights + rsync to worker + verify; `fetch-weights.sh nvidia-nvfp4` also stages the NVIDIA NVFP4 weights + DFlash2 draft + ships the pilcothink image (nvfp4-dflash2 stack)
 - `docker/labbuild/` — vendored build context for `glm53:lab` (digest-pinned base + patches + provenance)
+- `diagnostics/` — host-level forensics not tied to any one stack (driver/kernel OTA
+  discrepancies, freeze reports, forum-post drafts awaiting field data)
 - `benchmarks.md` — investigation + benchmark log (quality, speed, pools, forensics)
 - `NOTES-512k.md` — 512K upgrade notes + crash forensics + rollback
 - `example.env` / `.env` — configuration templates
@@ -241,7 +243,7 @@ truth; this list tracks meaningful milestones).
   Confounded by their `NVFP4-Spark` repack (187.7 GB, not our lab quant). Two
   boot gotchas fixed and documented: the cached B12X image predated
   `glm5_next` (pulled fresh `:latest` = vLLM dev d20260904) and — load-bearing —
-  **worker `10.100.90.4` has no DNS/internet**, so vLLM's HF-Hub file-list
+  **the worker node has no DNS/internet**, so vLLM's HF-Hub file-list
   lookup fails and rank-1 never joins NCCL world-init (head times out at 601 s):
   any HF-Hub-based serving on this fabric must set `HF_HUB_OFFLINE=1` +
   `TRANSFORMERS_OFFLINE=1` (our compose already sets both; external recipes
