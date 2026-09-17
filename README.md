@@ -102,6 +102,48 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 `KERNEL_CONFIG`, `LIMIT_MM_PER_PROMPT`, …). See the header block of
 `exec-vllm.sh` for the full knob list.
 
+### Stack flags at a glance
+
+Every knob from every `stacks/*.env`, side by side (generated from the stack
+files — they remain the single source of truth). `—` = flag omitted / var
+unset (the entrypoint or engine default applies; see `exec-vllm.sh`).
+
+| knob | lab | lab-vision | v9-512k | v9-262k-fp8 | v8-262k | nvfp4-dflash2 |
+|---|---|---|---|---|---|---|
+| image | `glm53:lab` | `glm53:lab` | `glm53:v9` | `glm53:v9` | `glm53:v9` | `pilcothink/vllm_spark_glm53:0.28` |
+| gpu-mem-util | `0.90` | `0.90` | `0.90` | `0.85` | `0.85` | `0.88` |
+| kv-cache-dtype | `fp8_ds_mla` | `fp8_ds_mla` | `fp8` | `fp8` | — (bf16) | `fp8` |
+| kv-cache-memory-bytes | `10737418240` | `9448928000` | `9663676416` | — | — | `9663676416` |
+| max-model-len | `524288` | `524288` | `524288` | `262144` | `262144` | `900096` |
+| max-num-seqs | `16` | `16` | `6` | `6` | `6` | `4` |
+| block-size | `256` | `256` | `2304` | `2304` | `2304` | `256` |
+| max-num-batched-tokens | `1024` | `2048` | `4096` | — | — | `1024` |
+| moe-backend | — | — | `marlin` | `marlin` | `marlin` | `b12x` |
+| linear-backend | — | — | — | — | — | `b12x` |
+| mamba-cache-mode | — | — | — | — | — | `align` |
+| dtype | — | — | — | — | — | `bfloat16` |
+| max-cudagraph-capture-size | — | — | — | — | — | `16` |
+| speculative | MTP k=3 | MTP k=3 | MTP k=4 | MTP k=4 | MTP k=4 | DFlash2 k=5 (`/workspace/models/glm53-dflash2-orig`, TRITON_ATTN, probabilistic/standard) |
+| kernel-config | autotune/cutedsl-warmup off | same as lab | same as lab | — | — | — (recipe omits it) |
+| limit-mm-per-prompt | — | `{"image": 4, "video": {1, 32 frames, 512×512}}` | — | — | — | — |
+| extra flags (SWITCHES) | chunked-prefill, prefix-caching, disable-custom-all-reduce, enforce-eager, language-model-only | chunked-prefill, prefix-caching, disable-custom-all-reduce, enforce-eager, skip-mm-profiling | chunked-prefill, prefix-caching, disable-custom-all-reduce, enforce-eager, language-model-only | enforce-eager | enforce-eager | chunked-prefill, prefix-caching, async-scheduling, skip-mm-profiling, no-flashinfer-autotune |
+| `VLLM_MLA_NOPE_PAD_ROPE` | `1` | `1` | — | — | — | — |
+| `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS` | — | — | — | — | — | `0` |
+| `VLLM_ALLOW_LONG_MAX_MODEL_LEN` | — | — | — | — | — | `1` |
+| `VLLM_GLM53_SPLIT_TARGET_BLOCK_SIZE` | — | — | — | — | — | `auto` |
+| `TORCH_USE_RTLD_GLOBAL` | `1` | `1` | — | — | — | `1` |
+| `TORCHINDUCTOR_COMPILE_THREADS` | — | — | — | — | — | `1` |
+| `VLLM_USE_AOT_COMPILE` | `0` | `0` | — | — | — | — |
+| `OMP_NUM_THREADS` | `4` | `4` | — | — | — | `4` |
+| `FLASHINFER_DISABLE_VERSION_CHECK` | — | — | `1` | `1` | `1` | — |
+| MASTER_PORT (rendezvous) | `29500` | `29500` | `29521` | `29521` | `29521` | `29503` |
+
+Common to every stack regardless of table (set in `docker-compose.yml`, not
+the stack files): `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`,
+`VLLM_ENGINE_READY_TIMEOUT_S=3600`, `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`,
+`TORCH_CUDA_ARCH_LIST=12.1a`, and the NCCL/RoCE fabric set
+(`NCCL_CUMEM_ENABLE=0`, `NCCL_NVLS_ENABLE=0`, `NCCL_IB_*`…).
+
 ## Layout
 
 - `docker-compose.yml` — one compose file for both ranks, all stacks
