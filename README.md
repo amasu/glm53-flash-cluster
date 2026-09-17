@@ -19,28 +19,29 @@ watchdog.sh             auto-restart whichever stack is configured in .env
 stacks/*.env            the ONLY thing that differs between stacks
 ```
 
-The standing config is the **lab-vision stack** (lab-quant with the
-multimodal front-end ON, `STACK=lab-vision`):
-`local-inference-lab/GLM-5.3-Flash-NVFP4` (mixed-precision NVFP4 experts +
-MXFP8 MTP drafter) on `glm53:lab` — 512K context, `fp8_ds_mla` KV with a
-9 GiB pinned pool, MTP k=3, `2048/16` batched-tokens/num-seqs, vision ON
-(`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), `--enforce-eager`
-(load-bearing). 2026-08-31 same-harness A/B: 92.5/100 tool-call quality, no
-text-quality cost vs the text-only `lab` profile (90/100) — benchmarks.md §9.
-2026-09-03: `MAX_NUM_BATCHED_TOKENS` raised 1024 → **2048** after a paired
-A/B (−21% long-prefill TTFT, decode and quality within noise, no OOM) —
-benchmarks.md §10.
+The standing config is the **nvfp4-dflash2 stack** (the 0rand long-context
+recipe, `STACK=nvfp4-dflash2`): `nvidia/GLM-5.3-Flash-NVFP4` (uniform NVFP4)
++ `incoai/GLM-5.3-Flash-DFlash2` draft on `pilcothink/vllm_spark_glm53:0.28`
+— **900K** context, `fp8` KV 9 GiB pin, DFlash2 k=5, b12x backends,
+cudagraphs ≤16 + async, `ESTIMATE_CUDAGRAPHS=0`. 2026-09-16: KV pool
+1,080,115 tok (1.20× at full ctx), **95/100** hardmode dev71/seed-42,
+~30 t/s c1 decode — benchmarks.md §14.
+
+The **lab-vision** stack (`glm53:lab`, lab-quant, 512K, MTP k=3, vision ON,
+`fp8_ds_mla` KV 9 GiB pin, `2048/16`, `--enforce-eager`) remains a
+one-command alternative: `./cluster.sh lab-vision takeover`. 2026-08-31
+same-harness A/B: 92.5/100 — benchmarks.md §9.
 
 ## The stacks
 
 | `STACK` | image | weights | profile |
 |---|---|---|---|
 | `lab` | `glm53:lab` | lab-quant (`WEIGHTS_DIR_LAB`) | 512K, `fp8_ds_mla` KV 10 GiB pin, MTP k=3, `1024/16`, LMO, eager — text-only standing config, 90/100 |
-| **`lab-vision`** | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin, `2048/16` batched/seqs (2026-09-03 A/B, benchmarks.md §10) — **default (`STACK=lab-vision`), 92.5/100** |
+| `lab-vision` | `glm53:lab` | lab-quant | same as `lab` + multimodal ON (`--skip-mm-profiling` + modern `--limit-mm-per-prompt`), 9 GiB KV pin, `2048/16` batched/seqs (2026-09-03 A/B, benchmarks.md §10) — 92.5/100, one-command alternative (`./cluster.sh lab-vision takeover`) |
 | `v9-512k` | `glm53:v9` | LibertAIDAI | 512K, `fp8` KV 9 GiB pin, MTP k=4, LMO — primary rollback path, 89/100 |
 | `v9-262k-fp8` | `glm53:v9` | LibertAIDAI | 262K, `fp8` KV unpinned, MTP k=4, mm ON — historical A/B point |
 | `v8-262k` | `glm53:v9` | LibertAIDAI | 262K, bf16 KV, MTP k=4, mm ON — day-0 bring-up, 89/100 |
-| `nvfp4-dflash2` | `pilcothink/vllm_spark_glm53:0.28` | NVIDIA NVFP4 (`WEIGHTS_DIR_NVFP4`) + DFlash2 draft | **900K**, `fp8` KV 9 GiB pin, DFlash2 k=5 (no MTP in the checkpoint), `1024/4`, b12x backends, graphs ≤16 + async, `ESTIMATE_CUDAGRAPHS=0` — the 0rand long-context recipe; **deployed 2026-09-16 via `cluster.sh`, 95/100 hardmode (dev71/seed-42), KV pool 1,080,115 tok = 1.20x (`benchmarks.md` §14)** |
+| **`nvfp4-dflash2`** | `pilcothink/vllm_spark_glm53:0.28` | NVIDIA NVFP4 (`WEIGHTS_DIR_NVFP4`) + DFlash2 draft | **900K**, `fp8` KV 9 GiB pin, DFlash2 k=5 (no MTP in the checkpoint), `1024/4`, b12x backends, graphs ≤16 + async, `ESTIMATE_CUDAGRAPHS=0` — the 0rand long-context recipe; **default (`STACK=nvfp4-dflash2`), deployed 2026-09-16, 95/100 hardmode (dev71/seed-42), KV pool 1,080,115 tok = 1.20x (`benchmarks.md` §14)** |
 
 Switching stacks is a config change, not a code change:
 
@@ -106,7 +107,7 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 - `docker-compose.yml` — one compose file for both ranks, all stacks
 - `exec-vllm.sh` — one container entrypoint; builds the `vllm serve` argv
   entirely from environment; **contains no stack policy**
-- `stacks/{lab,lab-vision,v9-512k,v9-262k-fp8,v8-262k}.env` — the stacks
+- `stacks/{lab,lab-vision,v9-512k,v9-262k-fp8,v8-262k,nvfp4-dflash2}.env` — the stacks
 - `cluster.sh` — orchestrator: `cluster.sh [STACK] <preflight|mirror|up|down|status|logs|takeover>`
 - `watchdog.sh` — probe `:SERVING_PORT`; restart via `cluster.sh takeover` (cron on the orchestrator)
 - `build-image.sh` — head: build the `glm53:v9` patch chain, ship to worker
@@ -138,35 +139,39 @@ consumed by `exec-vllm.sh` (`GPU_MEMORY_UTILIZATION`, `KV_CACHE_DTYPE`,
 git clone https://github.com/amasu/glm53-flash-cluster && cd glm53-flash-cluster
 cp example.env .env
 $EDITOR .env            # HEAD_HOST, HEAD_IP, WORKER_IP, REMOTE_DIR,
-                        # FABRIC_RANGE, IF_NAME, NCCL_IB_HCA, STACK=lab-vision
+                        # FABRIC_RANGE, IF_NAME, NCCL_IB_HCA,
+                        # STACK=nvfp4-dflash2 (default)
 set -a; source .env; set +a
 
 # 2. Mirror the repo (incl. .env + stacks/) to both nodes
 ./cluster.sh mirror
 
-# 3. Build the image(s) on the head, ship to the worker
+# 3. Get the image(s) on the head, ship to the worker
 ./docker/lab-build.sh            # glm53:lab (lab stacks)
 ./build-image.sh                 # glm53:v9  (LibertAIDAI stacks)
+# pilcothink 0.28 (nvfp4-dflash2 stack) is pulled + shipped by step 4
 
-# 4. Download weights (~186 GB lab-quant, or ~182 GB LibertAIDAI) to both nodes
+# 4. Download weights + draft to both nodes
 ./fetch-weights.sh               # LibertAIDAI -> WEIGHTS_DIR
 #    lab-quant -> WEIGHTS_DIR_LAB (huggingface-cli download
 #    local-inference-lab/GLM-5.3-Flash-NVFP4 --revision 378ca545…)
+./fetch-weights.sh nvidia-nvfp4  # NVIDIA NVFP4 -> WEIGHTS_DIR_NVFP4 +
+                                 # DFlash2 draft -> DRAFT_DIR + image
 
-# 5. Preflight, then launch the configured stack (default: lab-vision)
+# 5. Preflight, then launch the configured stack (default: nvfp4-dflash2)
 ./cluster.sh preflight
-./cluster.sh lab-vision up       # or: ./cluster.sh lab up, ./cluster.sh v9-512k up, …
+./cluster.sh nvfp4-dflash2 up    # or: ./cluster.sh lab-vision up, …
 
 # 6. Watch warmup (14-21 min), then smoke-test
-./cluster.sh lab-vision logs
+./cluster.sh nvfp4-dflash2 logs
 curl "http://$HEAD_HOST:${SERVING_PORT:-8000}/v1/models"
 ```
 
 Switching stacks (single-stack policy — stops the old one first):
 
 ```bash
-./cluster.sh v9-512k takeover    # rollback to the LibertAIDAI profile
 ./cluster.sh lab-vision takeover # switch to the vision-enabled lab profile
+./cluster.sh v9-512k takeover    # rollback to the LibertAIDAI profile
 ```
 
 Optionally run `watchdog.sh` from cron (`*/5 * * * *`) to auto-restart the
@@ -196,7 +201,10 @@ truth; this list tracks meaningful milestones).
   retired): KV pool 1,080,115 tok = 1.20x at full context (matches the
   recipe's launch-verified profile exactly), DFlash2 engaged
   (acceptance 3.2–6.0), 95/100 hardmode / 167 pts dev71/seed-42, ~30.3 t/s
-  c1 decode — full record in `benchmarks.md` §14.
+  c1 decode — full record in `benchmarks.md` §14. Also flipped the
+  **default stack** to `nvfp4-dflash2` (`.env` / `example.env` /
+  `cluster.sh` / docs): `./cluster.sh up` now boots the 0rand recipe;
+  lab-vision stays a one-command alternative.
 
 ### 2026-09-07
 - **eugr B12X post-fix image + lab checkpoint retest — PARITY, kept experimental**
