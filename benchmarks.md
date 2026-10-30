@@ -4,21 +4,26 @@ Single source of truth for everything investigated on this 2× DGX Spark (GB10)
 cluster: what was tried, the quality scores, the speed numbers, the KV-pool
 sizes, and the crash forensics. Updated as each experiment lands.
 
-- **Model (quant):** **ACTIVE = `local-inference-lab/GLM-5.3-Flash-NVFP4`** @ rev
-  `378ca545…` (MIXED_PRECISION: NVFP4 experts + MXFP8 MTP drafter, 186 GB).
-  Retired: `LibertAIDAI/GLM-5.3-Flash-NVFP4` (uniform NVFP4, 182 GiB) — kept for rollback.
+- **Model (quant):** **ACTIVE = `nvidia/GLM-5.3-Flash-NVFP4`** @ rev
+  `09b04e5e…` (uniform NVFP4, 191 GB, MIT) — the standing `nvfp4-dflash2`
+  stack (§14), deployed 2026-09-16. Retired: `local-inference-lab/GLM-5.3-Flash-NVFP4`
+  @ rev `378ca545…` (MIXED_PRECISION: NVFP4 experts + MXFP8 MTP drafter, 186 GB)
+  and `LibertAIDAI/GLM-5.3-Flash-NVFP4` (uniform NVFP4, 182 GiB) — kept for rollback.
   Both: 320B total / 18B active, `glm5_next` NoPE sparse-MLA + KDA.
 - **Topology:** 2× GB10, vLLM **TP=2** over RoCE. Head `<head-host>` (rank 0, fabric IP `HEAD_IP`), worker (`WORKER_IP`, rank 1, headless).
 - **Endpoint:** `http://<head-host>:$SERVING_PORT/v1` — served name `glm-5.3-flash` (Hermes default provider).
 - **Image (ACTIVE):** `pilcothink/vllm_spark_glm53:0.28` — the standing
-  `nvfp4-dflash2` stack (§14). Historical/rollback images:
+  `nvfp4-dflash2` stack (§14). **0.29 was A/B-tested 2026-09-17 and REJECTED
+  (§15: throughput flat, quality 90 vs 95 hardmode; rolled back to 0.28).**
+  Historical/rollback images:
   `glm53:lab` (day-0 `vllm-openai:glm53-flash-arm64-cu130` @ digest `905c0293…` + 5 lab patches: modelopt MTP-namespace fix + quantprobe, naming shim, CC-12.x sparse-MLA indexer guards, NoPE-MLA rope-pad) and
   `glm53:v9` (tonyd2wild chain), both retained on both nodes.
 - **Bench harness:** `tool-eval-bench` (dev24 → dev32 over the log's lifetime; see §Methodology), hardmode, **seed 42**, 88 scenarios. Two protocols were used: **c1/greedy** (standing quality protocol) and the **0rand-param replica** (parallel 4, trials 2, temp 0.1 — see §8).
 - **Watchdog:** `watchdog.sh` runs every 15 min (Mac cron job `glm-lab-watchdog`); probes :8000, auto-restarts the configured stack if down.
 
-> Note: this is the **GLM-5.3-Flash** provider (lab-quant, 10 GiB pin, 512K, 1.16M pool).
-> It is a different deployment from the DeepSeek-V4-Flash-0731 research tracked in
+> Note: this is the **GLM-5.3-Flash** provider (standing `nvfp4-dflash2` stack,
+> 9 GiB pin, 900K, 1.08M pool — see §14). It is a different deployment from the
+> DeepSeek-V4-Flash-0731 research tracked in
 > `~/deepseek-v4-flash-optimization/` (DSpark spec, fp8 KV, 2× GB10) — do not mix the numbers.
 
 ---
@@ -35,7 +40,8 @@ sizes, and the crash forensics. Updated as each experiment lands.
 | **5** | **`stacks/lab-vision.env` (lab-quant, vision ON, MTP-3, 2048 batch)** | **glm53:lab** | **lab MIXED** | **512K** | **fp8_ds_mla, 9 GiB pin**, block 256 | **1,022,844 tok** (1.95× conc. @512K) | **92.5/100** 0rand-p4 same-harness A/B (§9); batched-tokens A/B 2048: **90.5±0.7** vs 1024 89.5±0.7 (§10) | ~25.5 prose / 28.6 code tok/s; **24k-prefill TTFT 13.9 s (−21% vs 1024)** | **superseded as default 2026-09-16 (now `nvfp4-dflash2`); still a one-command alternative, `./cluster.sh lab-vision takeover`** |
 | 6 | eugr/spark-vllm-docker `glm-5.3-flash` recipe (NVFP4-**Spark** quant, B12X stack, MTP-5) | vllm-node-b12x (dev d20260904) | local-inference-lab NVFP4-Spark | **1M** | **fp8, 10 GiB pin**, block 4608 | **1,439,711 tok** (1.37× conc. @1M) | **84.0±1.4** 0rand-p4 seed42 (dev39) — **−4.5 vs profile 5's 88.5±2.1, no CI overlap** | ~22 prose / 26 code tok/s; 24k TTFT ~12–25 s (noisy); MTP-5 accept ~69% | **tested 2026-09-06 — REJECTED (§11)** |
 | **7** | **eugr recipe, post-fix image `841fdcc` + b12x loader (digest `b8cffdfb`), lab checkpoint, 512K, MTP-5, 8G pin, batch 4096, `--language-model-only --served-model-name glm-5.3-flash`** | **vllm-node-b12x (dev d20260907)** | **local-inference-lab NVFP4 (lab, non-Spark = profile 5 checkpoint)** | **512K** | **fp8, 8 GiB pin**, block 256 | **1,071,877 tok** (2.04× conc. @512K) | **89.0±2.8** 0rand-p4 seed42 (dev39) — **parity with profile 5 (88.5±2.1), CIs overlap**; +5.0 vs profile 6 (84.0) ⇒ the 09-06 rejection was checkpoint+pre-fix-image, not B12X | 23.9 prose / 24.7 code c1; c4 25.0 / c16 25.1; 24k TTFT 15.4 s settled @4096-batch; **weight load 60 s (vs 803 s)** | **tested 2026-09-07 — PARITY, kept experimental (§12)** |
-| **8** | **`stacks/nvfp4-dflash2.env` (0rand recipe: NVIDIA NVFP4 + DFlash2 k=5, 900K, 1024/4)** | **pilcothink 0.28 (b12x runtime)** | **nvidia NVFP4** @ `09b04e5e` + incoai DFlash2 draft | **900K** | **fp8, 9 GiB pin**, block 256 | **1,080,115 tok** (1.20× conc. @900K) | **95/100** (167/176 pts) 0rand-p4 seed42 (**dev71** — newer harness than the dev39 rows, not cross-comparable without a control re-run, §14) | 30.3–34.4 t/s decode c1 @pp1024/tg512 d0–8K; DFlash2 acceptance 3.2–6.0/5 | **DEPLOYED 2026-09-16 via `cluster.sh` (§14)** |
+| **8** | **`stacks/nvfp4-dflash2.env` (0rand recipe: NVIDIA NVFP4 + DFlash2 k=5, 900K, 1024/4)** | **pilcothink 0.28 (b12x runtime)** | **nvidia NVFP4** @ `09b04e5e` + incoai DFlash2 draft | **900K** | **fp8, 9 GiB pin**, block 256 | **1,080,115 tok** (1.20× conc. @900K) | **95/100** (167/176 pts) 0rand-p4 seed42 (**dev71** — newer harness than the dev39 rows, not cross-comparable without a control re-run, §14) | 30.3–34.4 t/s decode c1 @pp1024/tg512 d0–8K; DFlash2 acceptance 3.2–6.0/5 | **DEPLOYED 2026-09-16 via `cluster.sh` (§14); standing default** |
+| 8b | `stacks/nvfp4-dflash2-029.env` (profile 8 recipe + pilcothink 0.29 image + 4 new flags: `GLM53_FUSED_DFLASH_TAPS`, `GLM53_CONTEXT_CUDA_GRAPH`, `GLM53_GROUPED_CONTEXT_STORE`, `GLM53_CONTEXT_GRAPH_CACHE_V2=0`) | **pilcothink 0.29 (vLLM 0.29.1rc1, fused DFlash2 v3.1 LBHNC)** | same as profile 8 | **900K** | **fp8, 9 GiB pin**, block 256 | **1,080,115 tok** (1.20×, identical) | **90.0±0.0/100** (158/159 pts) 2-trial hardmode dev71 seed42 — 13 scenarios down vs 2 up vs profile 8's single trial (§15) | 28.2/31.5/31.3 t/s c1 @pp1024/tg512 d0/2K/8K (profile 8: 30.3/31.9/34.4) | **A/B-tested 2026-09-17 — REJECTED, rolled back to 0.28 (§15); image retained on both nodes for a future re-test** |
 
 The quality column is the tool-eval-bench hardmode score; the pool column is the
 engine-reported `GPU KV cache size` at boot. "×" is pool size relative to the
@@ -292,6 +298,36 @@ tool-call scenarios, so forcing max changes nothing measurable — 88 vs 89 is
 harness variance (±2 at seed 42). Downgrading effort to `low`/`high` would cut
 thinking tokens ~60% for latency gains, at unknown quality cost (untested).
 Default greedy remains the standing config.
+
+---
+
+## 16. New-harness anchor: tool-eval-bench 3.0.1.dev7 (2026-10-30) — standing reference
+
+The Mac harness was upgraded 2.6.1.dev71 → 3.0.1.dev7 (major bump). The hardmode
+suite grew **88 → 104 scenarios, 176 → 204 points**, so 2.x and 3.x scores are not
+comparable in either direction. This run re-establishes the anchor for the standing
+`nvfp4-dflash2` stack under the new scheme, same seed and 0rand-parameter protocol:
+
+- Command: `tool-eval-bench run --backend vllm
+  --base-url http://<head>:8000/v1 --model glm-5.3-flash --seed 42 --hardmode
+  --parallel 4 --trials 2 --timeout 360 --max-turns 32
+  --backend-kwargs '{"chat_template_kwargs": {"thinking": true,
+  "reasoning_effort": "max"}, "temperature": 0.1, "top_p": 1}'
+  --label glm53-nvfp4dflash2-teb3-1027`
+- **Result: 93.5 ± 0.7/100 (192.5 ± 4.9 of 204 pts)** — trial 1: 93 (189/204),
+  trial 2: 94 (196/204). Pass@2 94.2%, Pass^2 88.5% (gap 5.7pp), 95% CI [93.0, 94.0].
+  e2e ~86 min for both trials. Reports:
+  `tool-eval-runs/runs/2026/10/2026-10-30T08-48-17…--glm53-nvfp4dflash2-teb3-1027*.md`.
+- Deterministic fails: TC-43 (empty web_search query), **TC-92 (tenant isolation —
+  the same scenario that fails on most field stacks; technigma native is the only
+  measured-clean exception)**, TC-104 (batched dependency call). Flaky: TC-45,
+  TC-51, TC-69, TC-85, TC-98. Consistent partials: TC-68 (JSON in fences), TC-89,
+  TC-99.
+- Category note: Autonomous Planning swung 100% → 67% between trials (TC-51/TC-85
+  flakiness); Safety & Boundaries stable 92%/92%.
+- Responsiveness under parallel-4 max-effort: median turn 24.2 s (deployability 66) —
+  expected for this protocol, not a regression signal.
+- **All future A/Bs on this stack run against 93.5 (192.5/204) on 3.0.1.dev7.**
 
 ---
 
@@ -1004,3 +1040,42 @@ stopped and retired; this stack owns `:8000` under `cluster.sh`.**
 raw log `/var/tmp/hardmode-repl-20260916-214400.log` (all pre-deploy, standalone
 launcher, dev71), and the `cluster.sh` boot log on the head
 (`docker logs glm53-head`).
+
+## 15. pilcothink 0.29 A/B test (2026-09-17) — REJECTED, rolled back to 0.28
+
+Upstream pushed `pilcothink/vllm_spark_glm53:0.29` (vLLM 0.29.1rc1.dev194,
+commit `6eedaa374 "vllm 0.29.0 glm53"`, image 2026-09-17 16:24 UTC) with four
+new runtime flags: `GLM53_FUSED_DFLASH_TAPS=1`, `GLM53_CONTEXT_CUDA_GRAPH=1`,
+`GLM53_GROUPED_CONTEXT_STORE=1`, `GLM53_CONTEXT_GRAPH_CACHE_V2=0` — a fused
+DFlash2 kernel path ("GLM DFlash2 v3.1: native LBHNC; target block=4608;
+draft block=1152"). Test stack `stacks/nvfp4-dflash2-029.env` = the 0.28 stack
++ image + those four flags, nothing else (diff-verified); compose passthrough
+extended with the four vars; `cluster.sh` allow-list extended. Image shipped to
+both nodes via `docker save|ssh docker load` over the fabric; 0.28 retained as
+rollback.
+
+**Boot:** clean, ~17 min; KV pool **1,080,115 tok = 1.20× @900K — identical to
+0.28**; GMU 0.88 admission passed. No memory-layout regression.
+
+**Throughput** (pp1024/tg512 c1, identical shape to §14, single run each side):
+d0 28.2 (0.28: 30.3), d2048 31.5 (31.9), d8192 31.3 (34.4) → **flat to
+down, no gain**.
+
+**Quality** (hardmode 88, dev71, seed 42, parallel 4, effort high, 2 trials —
+baseline was 1 trial on the standalone launcher):
+**90.0 ± 0.0/100** (158/159 pts; Pass@2 92%, Pass^2 80.7%) vs 0.28's 95/100
+(167 pts). Per-scenario: 73/88 identical; **13 down vs 2 up** (one-sided →
+signal, per the A/B rules). Consistent on both 0.29 trials: TC-39 (2→1),
+TC-52 (2→1), TC-88 (2→0 hard fail); gains TC-61/TC-62 (both partial on 0.28).
+TC-43 unchanged (known reproducible quirk). Caveat: baseline is one trial from
+a different container generation — a same-protocol 0.28 2-trial control would
+close the gap, but with zero throughput gain and a negative quality signal it
+was not worth taking.
+
+**Verdict: REJECTED — rolled back to 0.28 (`cluster.sh nvfp4-dflash2
+takeover`) the same night. 0.29 image retained on both nodes (24.3 GB each) in
+case the fused-taps path improves in a later build.**
+**Evidence:** `~/tool-eval-runs/glm53-029-throughput-20260917-231540.log`,
+hardmode log `/var/tmp/hardmode-029-20260917-231715.log`, per-trial reports
+`~/tool-eval-runs/2026/09/2026-09-17T21-17-17…--glm53-nvfp4-029-dflash2.md`
+(+ `21-40-57…` trial 2) and `*_summary.md`.
